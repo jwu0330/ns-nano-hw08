@@ -80,6 +80,10 @@ def test_analyze_terms(client):
 def test_errors(client, path, status):
     r = client.get(path)
     assert r.status_code == status
+    if r.headers["content-type"].startswith("text/html"):
+        # On Render, Cloudflare itself rejects some requests (e.g. %00) before they reach the app.
+        assert "cloudflare" in r.text.lower()
+        return
     assert r.json()["error"]["message"]  # one error shape for every status
 
 

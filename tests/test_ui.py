@@ -46,6 +46,11 @@ def test_terms_flow(page):
     assert page.locator(".chip").count() > 0
     assert page.is_hidden("#form-locations")  # only the active tab's form is shown
     assert "NaN" not in page.inner_text("#sides")
+    # each card's location table lists cells over-represented on that card's side
+    for card in range(2):
+        for row in page.locator(f"#sides .side >> nth={card} >> table.locs tr").all()[1:]:
+            this, other = (int(c.inner_text().rstrip("%")) for c in row.locator("td").all()[1:3])
+            assert this >= other, (card, row.inner_text())
     assert page.locator("ol.studies li").count() == 100  # 50 per side
     shot(page, "terms")
     # editing the form must not change what "Show more" appends to the displayed query

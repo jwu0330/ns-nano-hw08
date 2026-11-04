@@ -258,11 +258,13 @@ function side(j, path, key, title, col) {
     el("h2", {}, el("span", { class: "sw", style: `background:var(${col})` }), title),
     el("div", { class: "secondary", text: `${fmt(d.count)} studies` }));
 
+  // p_a / p_b refer to the A-only / B-only groups; show them as "this side" / "other side".
+  const [mine, other] = key === "a_not_b" ? ["p_a", "p_b"] : ["p_b", "p_a"];
   const ct = j.characteristic_terms?.[key] || [];
   if (ct.length) {
     box.append(el("div", { class: "muted", text: "Characteristic terms" }),
       el("div", { class: "chips" }, ...ct.map(t => el("span", { class: "chip",
-        title: `${(100 * t.p_a).toFixed(1)}% of A-only vs ${(100 * t.p_b).toFixed(1)}% of B-only studies · z = ${t.z}` },
+        title: `${(100 * t[mine]).toFixed(1)}% of this side vs ${(100 * t[other]).toFixed(1)}% of the other side · z = ${Math.abs(t.z)}` },
         el("b", { text: t.term }), ` z ${Math.abs(t.z).toFixed(1)}`))));
   }
   const cl = j.characteristic_locations?.[key] || [];
@@ -272,8 +274,8 @@ function side(j, path, key, title, col) {
         el("tr", {}, ...["center", "this side", "other side", "z"].map(h => el("th", { text: h }))),
         ...cl.slice(0, 5).map(r => el("tr", {},
           el("td", { text: xyzText(r.center) }),
-          el("td", { text: `${(100 * r.p_a).toFixed(0)}%` }),
-          el("td", { text: `${(100 * r.p_b).toFixed(0)}%` }),
+          el("td", { text: `${(100 * r[mine]).toFixed(0)}%` }),
+          el("td", { text: `${(100 * r[other]).toFixed(0)}%` }),
           el("td", { text: Math.abs(r.z).toFixed(1) })))));
   }
   const list = el("ol", { class: "studies" });

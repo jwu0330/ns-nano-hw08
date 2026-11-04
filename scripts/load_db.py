@@ -38,7 +38,7 @@ import pandas as pd
 import psycopg
 
 HERE = Path(__file__).resolve().parent
-DEFAULT_DATA = HERE.parent.parent / "raw" / "ns-nano"
+DEFAULT_DATA = Path(os.getenv("NS_DATA_DIR", HERE.parent.parent / "raw" / "ns-nano"))
 TERM_PREFIX_SEP = "__"  # column names look like terms_abstract_tfidf__<term>
 SCHEMA = "ns"
 STAGE = "ns_build"

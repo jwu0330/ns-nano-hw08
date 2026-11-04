@@ -7,13 +7,15 @@ both are right.
 
 from __future__ import annotations
 
+import os
 from functools import cached_property
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
-DEFAULT_DATA = Path(__file__).resolve().parents[2] / "raw" / "ns-nano"
+# Folder with the teacher's parquet files; override with NS_DATA_DIR.
+DEFAULT_DATA = Path(os.getenv("NS_DATA_DIR", Path(__file__).resolve().parents[2] / "raw" / "ns-nano"))
 
 
 class Reference:

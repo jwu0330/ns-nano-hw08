@@ -17,7 +17,7 @@ when idle; the first request can take up to a minute.
 | `GET /dissociate/locations/{x1_y1_z1}/{x2_y2_z2}` | studies with a focus near `[x1,y1,z1]` but none near `[x2,y2,z2]` |
 | `GET /terms/{term}/studies` · `GET /locations/{x_y_z}/studies` | one set only |
 | `GET /terms?q=cingul` | vocabulary search |
-| `GET /` · `/img` · `/test_db` · `/health` | web page, template smoke tests, health check |
+| `GET /` · `/img` · `/test_db` · `/stats` · `/health` | web page, template smoke tests, loaded data summary, health check |
 
 Options for the dissociation endpoints:
 
@@ -27,10 +27,11 @@ Options for the dissociation endpoints:
 | `radius` | `6` | mm; a study mentions a location when it reports a focus within this distance (neurosynth package default) |
 | `both` | `false` | also return B but not A |
 | `analyze` | `false` | add the terms (and, for term queries, the 10 mm brain cells) that best separate the two sides, ranked by log-odds-ratio z score |
-| `limit`, `offset` | all, `0` | paging of the study lists (newest first) |
+| `limit`, `offset` | `1000`, `0` | paging of the study lists (newest first); `count` is always the full total |
 
 Terms may use `_` for spaces (`posterior_cingulate`). Unknown terms return 404
-with suggestions; malformed input returns 400 with a hint.
+with suggestions; malformed input returns 400 with a hint; out-of-range
+parameters return 422. Every error has the shape `{"error": {"message": ...}}`.
 
 ```bash
 curl "https://ns-nano-hw08.onrender.com/dissociate/terms/posterior_cingulate/ventromedial_prefrontal?both=true&limit=3"
@@ -84,7 +85,8 @@ pandas alone; `tests/test_oracle.py` checks the API against it study by study.
 
 `render.yaml` describes a free PostgreSQL and a free web service. Start
 command: `gunicorn app:app -k uvicorn_worker.UvicornWorker --bind 0.0.0.0:$PORT`.
-Load the data once with `scripts/load_db.py` using the database's external URL.
+Load the data once with `scripts/load_db.py` using the database's external URL,
+then restart the web service (it caches study sets and the analysis index).
 
 ## License
 

@@ -32,5 +32,6 @@ def get_engine() -> Engine:
         pool_size=int(os.getenv("DB_POOL_SIZE", "3")),
         max_overflow=2,
         pool_recycle=300,
+        pool_timeout=10,  # fail fast (503) instead of holding requests for 30 s
         connect_args={"options": "-c search_path=ns,public -c statement_timeout=20000"},
     )

@@ -24,13 +24,16 @@ LOCATION_CASES = [
 ]
 
 
+ALL = 20000  # the API lists at most 1000 studies per direction unless asked
+
+
 def ids(direction):
     return {s["study_id"] for s in direction["studies"]}
 
 
 @pytest.mark.parametrize("a,b,thr", TERM_CASES)
 def test_terms_match_reference(client, ref, a, b, thr):
-    r = client.get(f"/dissociate/terms/{a}/{b}", params={"threshold": thr, "both": True})
+    r = client.get(f"/dissociate/terms/{a}/{b}", params={"threshold": thr, "both": True, "limit": ALL})
     assert r.status_code == 200
     j = r.json()
     exp_ab, exp_ba = ref.dissociate_terms(a, b, thr)
@@ -43,7 +46,7 @@ def test_terms_match_reference(client, ref, a, b, thr):
 @pytest.mark.parametrize("a,b,radius", LOCATION_CASES)
 def test_locations_match_reference(client, ref, a, b, radius):
     path = "/dissociate/locations/{}/{}".format("_".join(map(str, a)), "_".join(map(str, b)))
-    r = client.get(path, params={"radius": radius, "both": True})
+    r = client.get(path, params={"radius": radius, "both": True, "limit": ALL})
     assert r.status_code == 200
     j = r.json()
     exp_ab, exp_ba = ref.dissociate_locations(a, b, radius)
@@ -53,9 +56,9 @@ def test_locations_match_reference(client, ref, a, b, radius):
 
 
 def test_single_set_endpoints_match_reference(client, ref):
-    j = client.get("/terms/amygdala/studies").json()
+    j = client.get("/terms/amygdala/studies", params={"limit": ALL}).json()
     assert ids(j) == ref.studies_with_term("amygdala")
-    j = client.get("/locations/-22_0_-20/studies", params={"radius": 8}).json()
+    j = client.get("/locations/-22_0_-20/studies", params={"radius": 8, "limit": ALL}).json()
     assert ids(j) == ref.studies_near((-22, 0, -20), 8)
 
 

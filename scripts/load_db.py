@@ -118,7 +118,9 @@ def build_index(meta: pd.DataFrame, coords: pd.DataFrame, terms: pd.DataFrame) -
     order = np.lexsort((t_idx, s_idx))
     term_ptr = np.concatenate([[0], np.cumsum(np.bincount(s_idx, minlength=len(study_ids)))])
 
-    grid = np.rint(coords[["x", "y", "z"]].to_numpy(dtype=float) / CELL_MM).astype(np.int16) * CELL_MM
+    # nearest grid point, halves rounded up (np.rint would round halves to even and
+    # bias the 11 % of foci that sit exactly between two grid points)
+    grid = np.floor(coords[["x", "y", "z"]].to_numpy(dtype=float) / CELL_MM + 0.5).astype(np.int16) * CELL_MM
     cells, cell_of_focus = np.unique(grid, axis=0, return_inverse=True)
     c_study = np.searchsorted(study_ids, strings(coords["study_id"]))
     pairs = np.unique(np.stack([c_study, cell_of_focus.ravel()], axis=1), axis=0)  # one per study and cell
@@ -152,8 +154,9 @@ def copy_df(cur: psycopg.Cursor, table: str, df: pd.DataFrame) -> None:
 
 
 DDL = f"""
-CREATE EXTENSION IF NOT EXISTS postgis;
-CREATE EXTENSION IF NOT EXISTS pg_trgm;
+-- Extensions live in public: if they sat in "ns", replacing the schema would drop them.
+CREATE EXTENSION IF NOT EXISTS postgis SCHEMA public;
+CREATE EXTENSION IF NOT EXISTS pg_trgm SCHEMA public;
 DROP SCHEMA IF EXISTS {STAGE} CASCADE;
 CREATE SCHEMA {STAGE};
 
@@ -269,6 +272,11 @@ def main() -> int:
             conn.commit()
 
             log("swapping staging schema into place")
+            in_schema = cur.execute(
+                "SELECT extname FROM pg_extension WHERE extnamespace::regnamespace::text IN (%s, %s)", (SCHEMA, STAGE)
+            ).fetchall()
+            if in_schema:
+                raise RuntimeError(f"extensions {in_schema} live in {SCHEMA}/{STAGE}; dropping it would remove them")
             cur.execute(f"DROP SCHEMA IF EXISTS {SCHEMA} CASCADE")
             cur.execute(f"ALTER SCHEMA {STAGE} RENAME TO {SCHEMA}")
             conn.commit()
@@ -277,8 +285,16 @@ def main() -> int:
         for t in ("metadata", "coordinates", "annotations_terms", "terms"):
             conn.execute(f"ANALYZE {SCHEMA}.{t}")
         size = conn.execute("SELECT pg_size_pretty(pg_database_size(current_database()))").fetchone()[0]
+        # the swapped-in schema must still be queryable end to end
+        n_near = conn.execute(
+            f"SELECT count(DISTINCT study_id) FROM {SCHEMA}.coordinates "
+            "WHERE ST_3DDWithin(geom, ST_MakePoint(0, -52, 26), 6)"
+        ).fetchone()[0]
+        if not n_near:
+            raise RuntimeError("post-load check failed: no studies near [0, -52, 26]")
 
     log(f"done in {time.time() - t0:.0f}s; rows {got}; database size {size}")
+    log("restart the web service so its caches and analysis index pick up the new data")
     return 0
 
 

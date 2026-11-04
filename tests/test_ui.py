@@ -48,8 +48,11 @@ def test_terms_flow(page):
     assert "NaN" not in page.inner_text("#sides")
     assert page.locator("ol.studies li").count() == 100  # 50 per side
     shot(page, "terms")
+    # editing the form must not change what "Show more" appends to the displayed query
+    page.fill("#form-terms [name=b]", "memory")
     page.click("#sides .side >> nth=0 >> button:has-text('Show more')")
     page.wait_for_function("document.querySelectorAll('#sides .side')[0].querySelectorAll('li').length === 100")
+    assert "797 left" in page.inner_text("#sides .side >> nth=0 >> button")  # 897 - 100
     assert not page.errors, page.errors
 
 

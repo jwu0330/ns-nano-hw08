@@ -41,6 +41,8 @@ def normalize_term(text: str) -> str:
     term = re.sub(r"[_+\s]+", " ", text).strip().lower()
     if not term:
         raise InputError("Empty term.", "Give a Neurosynth term, e.g. amygdala.")
+    if not re.fullmatch(r"[\w\s'-]+", term):  # vocabulary terms are letters, digits and spaces
+        raise InputError("Terms may contain only letters, digits and spaces.", "Give a Neurosynth term, e.g. amygdala.")
     if len(term) > MAX_TERM:
         raise InputError(f"Term is longer than {MAX_TERM} characters.", "Give a Neurosynth term, e.g. amygdala.")
     return term

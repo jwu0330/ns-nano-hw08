@@ -148,13 +148,12 @@ const fmt = (n) => n.toLocaleString("en-US");
 const xyzText = (v) => Array.isArray(v) ? `[${v.join(", ")}]` : v;
 
 // ---------------------------------------------------------------- server status
-fetch("/test_db").then(r => r.json()).then(j => {
-  const ok = j.ok;
-  $("#status").replaceChildren(
-    el("span", { class: "dot", style: `background:var(${ok ? "--ok" : "--err"})` }),
-    ok ? `Server working · database connected (${fmt(j.metadata_count)} studies, ${fmt(j.coordinates_count)} foci, ${fmt(j.terms_count)} terms)`
-       : `Server working · database error: ${j.error || "unknown"}`);
-}).catch(() => $("#status").lastChild.textContent = "Server working · database check failed");
+fetch("/stats").then(r => r.ok ? r.json() : Promise.reject(r.status)).then(j => {
+  const n = j.row_counts;
+  $("#status").replaceChildren(el("span", { class: "dot", style: "background:var(--ok)" }),
+    `Server working · database connected (${fmt(n.metadata)} studies, ${fmt(n.coordinates)} foci, ${fmt(n.terms)} terms)`);
+}).catch(() => $("#status").replaceChildren(el("span", { class: "dot", style: "background:var(--err)" }),
+  "Server working · database not reachable"));
 
 // ---------------------------------------------------------------- tabs, examples, autocomplete
 let mode = "terms";
@@ -185,6 +184,7 @@ document.querySelectorAll("input.term").forEach(inp => inp.addEventListener("inp
 }));
 
 // ---------------------------------------------------------------- query
+// Path for the current form. Paging later reuses the path that was actually shown.
 function apiPath(offset = 0) {
   const f = $(`#form-${mode}`);
   const enc = (s) => encodeURIComponent(s.trim().replace(/\s*[, ]\s*/g, mode === "locations" ? "_" : " "));
@@ -207,7 +207,6 @@ async function getJSON(path) {
   return j;
 }
 
-let last = null;
 async function run() {
   const f = $(`#form-${mode}`);
   if (!f.reportValidity()) return;
@@ -216,8 +215,7 @@ async function run() {
   const path = apiPath();
   history.replaceState(null, "", "#" + path);
   try {
-    last = { data: await getJSON(path), mode };
-    render(last.data, path);
+    render(await getJSON(path), path);
   } catch (err) {
     $("#result").hidden = false;
     $("#summary").replaceChildren(el("p", { class: "error", text: err.message }));
@@ -250,11 +248,11 @@ function render(j, path) {
   $("#url").replaceChildren(el("a", { href: path, target: "_blank", text: location.origin + path }));
 
   $("#sides").replaceChildren(
-    side(j, "a_not_b", `${nameA} but not ${nameB}`, "--series-a"),
-    side(j, "b_not_a", `${nameB} but not ${nameA}`, "--series-b"));
+    side(j, path, "a_not_b", `${nameA} but not ${nameB}`, "--series-a"),
+    side(j, path, "b_not_a", `${nameB} but not ${nameA}`, "--series-b"));
 }
 
-function side(j, key, title, col) {
+function side(j, path, key, title, col) {
   const d = j[key];
   const box = el("section", { class: "card side" },
     el("h2", {}, el("span", { class: "sw", style: `background:var(${col})` }), title),
@@ -286,10 +284,19 @@ function side(j, key, title, col) {
     let offset = d.studies.length;
     more.onclick = async () => {
       more.disabled = true;
-      const next = (await getJSON(apiPath(offset).replace("analyze=true", "analyze=false")))[key];
-      addStudies(list, next.studies); offset += next.studies.length;
-      more.disabled = false;
-      if (offset >= d.count) more.remove(); else more.textContent = `Show more (${fmt(d.count - offset)} left)`;
+      const url = new URL(path, location.origin);  // the query on screen, not the form's current values
+      url.searchParams.set("offset", offset);
+      url.searchParams.set("analyze", "false");
+      try {
+        const next = (await getJSON(url.pathname + url.search))[key];
+        addStudies(list, next.studies); offset += next.studies.length;
+        if (offset >= d.count || !next.studies.length) return more.remove();
+        more.textContent = `Show more (${fmt(d.count - offset)} left)`;
+      } catch (err) {
+        more.textContent = `Retry (${err.message})`;
+      } finally {
+        more.disabled = false;
+      }
     };
     box.append(more);
   }
@@ -306,7 +313,9 @@ function addStudies(list, studies) {
 
 // ---------------------------------------------------------------- restore from URL hash
 (function init() {
-  const m = decodeURIComponent(location.hash).match(/^#\/dissociate\/(terms|locations)\/([^/]+)\/([^/?]+)\?(.*)$/);
+  let hash = "";
+  try { hash = decodeURIComponent(location.hash); } catch { /* malformed hash: ignore */ }
+  const m = hash.match(/^#\/dissociate\/(terms|locations)\/([^/]+)\/([^/?]+)\?(.*)$/);
   setMode(m ? m[1] : "terms");
   if (m) {
     const f = $(`#form-${m[1]}`), p = new URLSearchParams(m[4]);

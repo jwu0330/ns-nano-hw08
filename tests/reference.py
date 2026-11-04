@@ -54,8 +54,13 @@ class Reference:
         return int((self.ann.loc[sorted(studies), term].to_numpy() > threshold).sum())
 
     def cell_count(self, studies: set[str], center: tuple[int, int, int], cell_mm: int = 10) -> int:
-        """Studies with a focus whose nearest 10 mm grid point is ``center``."""
+        """Studies with a focus in the cell around ``center``: center - 5 <= v < center + 5 on each axis.
+
+        Written as an interval test on purpose (the loader rounds instead), so the two
+        cannot share a rounding mistake.
+        """
         c = self.coords[self.coords["study_id"].isin(studies)]
-        grid = np.rint(c[["x", "y", "z"]].to_numpy() / cell_mm) * cell_mm
-        hit = (grid == np.asarray(center)).all(axis=1)
+        v = c[["x", "y", "z"]].to_numpy()
+        lo = np.asarray(center, dtype=float) - cell_mm / 2
+        hit = ((v >= lo) & (v < lo + cell_mm)).all(axis=1)
         return int(c["study_id"][hit].nunique())

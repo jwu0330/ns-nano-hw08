@@ -71,6 +71,9 @@ def test_analyze_terms(client):
     (DMN_TERMS + "?threshold=-1", 422),
     (DMN_TERMS + "?limit=0", 422),
     (DMN_TERMS + "?threshold=nan", 422),
+    (DMN_TERMS + "?offset=9223372036854775808", 422),
+    ("/dissociate/terms/a%00b/fear", 400),
+    ("/terms/fear%3Cscript%3E/studies", 400),
     ("/dissociate/terms/" + "a" * 500 + "/fear", 400),
     ("/no/such/endpoint", 404),
 ])
@@ -97,10 +100,29 @@ def test_cors_and_cache_headers(client):
 
 
 def test_term_search_has_no_wildcards(client):
-    assert client.get("/terms", params={"q": "%"}).json()["terms"] == []
-    assert client.get("/terms", params={"q": "_"}).status_code == 200  # empty query lists common terms
+    common = client.get("/terms", params={"q": ""}).json()["terms"]
+    # '%' is not a term character, so it is ignored instead of acting as a LIKE wildcard
+    assert client.get("/terms", params={"q": "%"}).json()["terms"] == common
+    assert client.get("/terms", params={"q": "_"}).json()["terms"] == common
+    assert all("cingul" in t["term"] for t in client.get("/terms", params={"q": "cingul"}).json()["terms"])
 
 
 def test_long_term_is_not_echoed(client):
     r = client.get("/dissociate/terms/" + "a" * 500 + "/fear")
     assert len(r.content) < 300
+
+
+def test_default_limit_keeps_full_count(client):
+    j = client.get("/terms/memory/studies").json()
+    assert j["count"] == 2744 and len(j["studies"]) == 1000
+    assert len(client.get("/terms/memory/studies", params={"limit": 5000}).json()["studies"]) == 2744
+
+
+def test_stats(client):
+    j = client.get("/stats").json()
+    assert j["row_counts"] == {"metadata": 14371, "coordinates": 507891, "annotations_terms": 1049299, "terms": 3228}
+    assert "source" in j and "loaded_at" in j
+
+
+def test_nul_in_search_is_harmless(client):
+    assert client.get("/terms", params={"q": "a\x00b"}).status_code == 200

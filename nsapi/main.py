@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import threading
 import time
@@ -17,6 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from sqlalchemy import text
+from sqlalchemy.exc import DBAPIError, TimeoutError as PoolTimeout
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from . import analysis
@@ -84,6 +86,18 @@ async def _invalid(_: Request, exc: RequestValidationError) -> JSONResponse:
     return JSONResponse(status_code=422, content={"error": {"message": message, "details": details}})
 
 
+@app.exception_handler(DBAPIError)
+@app.exception_handler(PoolTimeout)
+@app.exception_handler(analysis.StaleIndex)
+async def _unavailable(_: Request, exc: Exception) -> JSONResponse:
+    log.warning("service unavailable: %r", exc)
+    return JSONResponse(
+        status_code=503,
+        content={"error": {"message": "The database is busy or was just reloaded; please retry in a moment."}},
+        headers={"Retry-After": "10"},
+    )
+
+
 @app.exception_handler(StarletteHTTPException)
 async def _http_error(_: Request, exc: StarletteHTTPException) -> JSONResponse:
     message = "No such endpoint. See /docs." if exc.status_code == 404 else str(exc.detail)
@@ -95,7 +109,8 @@ async def _timing_and_cache(request: Request, call_next):
     t0 = time.perf_counter()
     response = await call_next(request)
     response.headers["Server-Timing"] = f"app;dur={(time.perf_counter() - t0) * 1000:.1f}"
-    # The data never changes between deployments, so successful lookups can be cached.
+    # The data only changes when scripts/load_db.py is rerun (followed by a restart),
+    # so successful lookups can be cached by browsers for an hour.
     if response.status_code == 200 and request.url.path.startswith(("/dissociate", "/terms", "/locations")):
         response.headers["Cache-Control"] = "public, max-age=3600"
     return response
@@ -110,8 +125,9 @@ Radius = Annotated[
 ]
 Both = Annotated[bool, Query(description="Also return the opposite direction (B but not A).")]
 Analyze = Annotated[bool, Query(description="Add terms (and, for term queries, brain locations) that characterise each side.")]
-Limit = Annotated[int | None, Query(ge=1, le=20000, description="Maximum studies listed per direction (default: all).")]
-Offset = Annotated[int, Query(ge=0, description="Skip this many studies (for paging).")]
+DEFAULT_LIMIT = 1000  # every example in the template returns fewer studies than this
+Limit = Annotated[int, Query(ge=1, le=20000, description="Maximum studies listed per direction; `count` is always the full total.")]
+Offset = Annotated[int, Query(ge=0, le=1_000_000, description="Skip this many studies (for paging).")]
 TermA = Annotated[str, PathParam(description="Term A (spaces or `_`).", openapi_examples={"PCC": {"value": "posterior cingulate"}})]
 TermB = Annotated[str, PathParam(description="Term B (spaces or `_`).", openapi_examples={"vmPFC": {"value": "ventromedial prefrontal"}})]
 CoordsA = Annotated[str, PathParam(description="Location A as `x_y_z` (MNI mm).", openapi_examples={"PCC": {"value": "0_-52_26"}})]
@@ -119,7 +135,9 @@ CoordsB = Annotated[str, PathParam(description="Location B as `x_y_z` (MNI mm)."
 
 
 # Study-id sets are pure functions of the (static) database, so they are memoised.
-@lru_cache(maxsize=1024)
+# The cache is small on purpose: a set can hold ~8,000 ids (~1 MB) and keys are
+# arbitrary floats, so a large cache could exhaust the 512 MB free instance.
+@lru_cache(maxsize=32)
 def _term_set(term: str, threshold: float) -> frozenset[str]:
     with get_engine().connect() as conn:
         if not q.term_exists(conn, term):
@@ -127,13 +145,13 @@ def _term_set(term: str, threshold: float) -> frozenset[str]:
         return q.term_studies(conn, term, threshold)
 
 
-@lru_cache(maxsize=1024)
+@lru_cache(maxsize=32)
 def _near_set(xyz: tuple[float, float, float], radius: float) -> frozenset[str]:
     with get_engine().connect() as conn:
         return q.near_studies(conn, xyz, radius)
 
 
-def _direction(conn, ids: frozenset[str], limit: int | None, offset: int) -> dict[str, Any]:
+def _direction(conn, ids: frozenset[str], limit: int, offset: int) -> dict[str, Any]:
     return {"count": len(ids), "studies": q.study_details(conn, ids, limit, offset)}
 
 
@@ -144,7 +162,7 @@ def _dissociation(
     *,
     both: bool,
     analyze: bool,
-    limit: int | None,
+    limit: int,
     offset: int,
     term_exclude: tuple[str, ...] = (),
     threshold: float = 0.001,
@@ -180,7 +198,7 @@ def dissociate_terms(
     threshold: Threshold = 0.001,
     both: Both = False,
     analyze: Analyze = False,
-    limit: Limit = None,
+    limit: Limit = DEFAULT_LIMIT,
     offset: Offset = 0,
 ) -> dict[str, Any]:
     """Studies that mention **term_a** but not **term_b**.
@@ -206,7 +224,7 @@ def dissociate_locations(
     radius: Radius = 6.0,
     both: Both = False,
     analyze: Analyze = False,
-    limit: Limit = None,
+    limit: Limit = DEFAULT_LIMIT,
     offset: Offset = 0,
 ) -> dict[str, Any]:
     """Studies reporting activation near **[x1, y1, z1]** but not near **[x2, y2, z2]**.
@@ -226,7 +244,7 @@ def dissociate_locations(
 
 # ------------------------------------------------------------------ single-set endpoints (template stubs, implemented)
 @app.get("/terms/{term}/studies", tags=["lookup"])
-def studies_by_term(term: str, threshold: Threshold = 0.001, limit: Limit = None, offset: Offset = 0) -> dict[str, Any]:
+def studies_by_term(term: str, threshold: Threshold = 0.001, limit: Limit = DEFAULT_LIMIT, offset: Offset = 0) -> dict[str, Any]:
     """Studies that mention a term."""
     t = normalize_term(term)
     ids = _term_set(t, threshold)
@@ -235,7 +253,7 @@ def studies_by_term(term: str, threshold: Threshold = 0.001, limit: Limit = None
 
 
 @app.get("/locations/{coords}/studies", tags=["lookup"])
-def studies_by_location(coords: str, radius: Radius = 6.0, limit: Limit = None, offset: Offset = 0) -> dict[str, Any]:
+def studies_by_location(coords: str, radius: Radius = 6.0, limit: Limit = DEFAULT_LIMIT, offset: Offset = 0) -> dict[str, Any]:
     """Studies that report a focus near an MNI coordinate."""
     xyz = parse_coords(coords)
     ids = _near_set(xyz, radius)
@@ -264,6 +282,14 @@ def list_terms(
 @app.get("/", response_class=HTMLResponse, tags=["service"])
 def index() -> str:
     return (STATIC / "index.html").read_text(encoding="utf-8")
+
+
+@app.get("/stats", tags=["service"])
+def stats() -> dict[str, Any]:
+    """What is loaded: row counts, source and load time (cheap; used by the web page)."""
+    with get_engine().connect() as conn:
+        info = dict(conn.execute(text("SELECT key, value FROM ns.build_info")).all())
+    return {"row_counts": json.loads(info.pop("row_counts")), **info}
 
 
 @app.get("/health", tags=["service"])
@@ -304,5 +330,6 @@ def test_db() -> JSONResponse:
         payload["ok"] = True
         return JSONResponse(payload)
     except Exception as exc:  # report, do not crash: this is a diagnostic endpoint
-        payload["error"] = str(exc)
+        log.exception("test_db failed")
+        payload["error"] = type(exc).__name__  # details go to the log, not to the client
         return JSONResponse(payload, status_code=500)

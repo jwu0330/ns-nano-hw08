@@ -24,6 +24,10 @@ from sqlalchemy import text
 from .db import get_engine
 
 
+class StaleIndex(RuntimeError):
+    """The in-memory index does not match the database (it was reloaded); restart the service."""
+
+
 @dataclass(frozen=True)
 class AnalysisIndex:
     study_ids: np.ndarray  # sorted study ids (row order)
@@ -44,7 +48,7 @@ class AnalysisIndex:
         ids = np.asarray(sorted(ids), dtype=str)
         pos = np.searchsorted(self.study_ids, ids)
         if len(ids) and (pos.max() >= len(self.study_ids) or (self.study_ids[pos] != ids).any()):
-            raise KeyError("study id missing from the analysis index")
+            raise StaleIndex("study id missing from the analysis index")
         return pos
 
     @staticmethod
@@ -97,10 +101,10 @@ def log_odds(n_a: int, size_a: int, n_b: int, size_b: int) -> tuple[float, float
 
 def _rank(labels: list, n_a: np.ndarray, n_b: np.ndarray, size_a: int, size_b: int, k: int) -> dict[str, list[dict]]:
     """Top-k features for each side; a feature must appear in >= max(3, 2 %) of that side."""
-    min_count = max(3, math.ceil(0.02 * min(size_a, size_b)))
+    min_a, min_b = (max(3, math.ceil(0.02 * size)) for size in (size_a, size_b))
     rows = []
     for label, na, nb in zip(labels, n_a.tolist(), n_b.tolist()):
-        if max(na, nb) < min_count:
+        if na < min_a and nb < min_b:
             continue
         lor, z = log_odds(na, size_a, nb, size_b)
         rows.append({
@@ -108,8 +112,8 @@ def _rank(labels: list, n_a: np.ndarray, n_b: np.ndarray, size_a: int, size_b: i
             "p_a": round(na / size_a, 4), "p_b": round(nb / size_b, 4),
             "log_odds": round(lor, 3), "z": round(z, 2),
         })
-    a_side = sorted((r for r in rows if r["n_a"] >= min_count and r["z"] > 0), key=lambda r: -r["z"])
-    b_side = sorted((r for r in rows if r["n_b"] >= min_count and r["z"] < 0), key=lambda r: r["z"])
+    a_side = sorted((r for r in rows if r["n_a"] >= min_a and r["z"] > 0), key=lambda r: -r["z"])
+    b_side = sorted((r for r in rows if r["n_b"] >= min_b and r["z"] < 0), key=lambda r: r["z"])
     return {"a_not_b": a_side[:k], "b_not_a": b_side[:k]}
 
 

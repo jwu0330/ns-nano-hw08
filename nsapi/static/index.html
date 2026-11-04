@@ -1,1 +1,322 @@
-<!doctype html><meta charset="utf-8"><title>Neurosynth Dissociation API</title><p>Server working!</p>
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Neurosynth Dissociation</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='5.5' cy='8' r='4.5' fill='%232a78d6'/%3E%3Ccircle cx='10.5' cy='8' r='4.5' fill='%23eb6834' fill-opacity='.85'/%3E%3C/svg%3E">
+<style>
+  :root {
+    color-scheme: light;
+    --surface-0: #f4f3f0; --surface-1: #fcfcfb; --border: #e2e0da;
+    --text-primary: #0b0b0b; --text-secondary: #52514e; --text-muted: #77756f;
+    --series-a: #2a78d6; --series-b: #eb6834; --both: #b8b6ae; --accent: #2a78d6;
+    --ok: #008300; --err: #c4302f;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      color-scheme: dark;
+      --surface-0: #121211; --surface-1: #1a1a19; --border: #383835;
+      --text-primary: #f0efec; --text-secondary: #c3c2b7; --text-muted: #9a998f;
+      --series-a: #3987e5; --series-b: #d95926; --both: #5e5d58; --accent: #6aa6ef;
+      --ok: #3fb950; --err: #f07171;
+    }
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body { margin: 0; font: 15px/1.5 system-ui, -apple-system, "Segoe UI", "Noto Sans", sans-serif;
+         background: var(--surface-0); color: var(--text-primary); }
+  main { max-width: 1100px; margin: 0 auto; padding: 24px 16px 64px; }
+  h1 { font-size: 1.5rem; margin: 0 0 4px; }
+  h2 { font-size: 1.05rem; margin: 0 0 8px; }
+  a { color: var(--accent); }
+  .muted { color: var(--text-muted); } .secondary { color: var(--text-secondary); }
+  .card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin-top: 16px; }
+  .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: end; }
+  label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--text-secondary); }
+  input { font: inherit; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px;
+          background: var(--surface-0); color: var(--text-primary); min-width: 0; }
+  input.term { width: 220px; } input.xyz { width: 140px; } input.num { width: 90px; }
+  button { font: inherit; padding: 6px 14px; border-radius: 6px; border: 1px solid var(--border);
+           background: var(--surface-0); color: var(--text-primary); cursor: pointer; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button:disabled { opacity: .6; cursor: wait; }
+  .tabs { display: flex; gap: 4px; margin-bottom: 12px; }
+  .tabs button[aria-selected="true"] { background: var(--text-primary); color: var(--surface-1); border-color: var(--text-primary); }
+  .examples { margin-top: 10px; font-size: 13px; }
+  .examples button { font-size: 13px; padding: 2px 8px; margin: 2px 4px 2px 0; }
+  .status { font-size: 13px; }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: 1px; }
+  code.url { display: block; overflow-x: auto; white-space: nowrap; font-size: 12px; padding: 6px 8px;
+             background: var(--surface-0); border-radius: 6px; margin-top: 8px; }
+  /* split bar: A only | both | B only, 2px surface gaps, 4px rounded ends */
+  .bar { display: flex; gap: 2px; height: 28px; margin: 10px 0 6px; }
+  .bar div { min-width: 2px; position: relative; }
+  .bar div:first-child { border-radius: 4px 0 0 4px; } .bar div:last-child { border-radius: 0 4px 4px 0; }
+  .legend { display: flex; gap: 16px; flex-wrap: wrap; font-size: 13px; color: var(--text-secondary); }
+  .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 760px) { .cols { grid-template-columns: 1fr; } }
+  .side h2 .sw { width: 12px; height: 12px; }
+  ol.studies { margin: 0; padding-left: 0; list-style: none; max-height: 520px; overflow-y: auto; }
+  ol.studies li { padding: 8px 0; border-top: 1px solid var(--border); }
+  ol.studies .meta { font-size: 12px; color: var(--text-muted); }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 12px; }
+  .chip { font-size: 12px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border); cursor: help; }
+  .chip b { font-weight: 600; }
+  .error { color: var(--err); }
+  table.locs { border-collapse: collapse; font-size: 12px; margin-bottom: 12px; }
+  table.locs td, table.locs th { padding: 2px 8px 2px 0; text-align: right; }
+  table.locs th { color: var(--text-muted); font-weight: 500; }
+  footer { margin-top: 32px; font-size: 13px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Neurosynth Dissociation</h1>
+  <div class="status secondary" id="status"><span class="dot" style="background:var(--text-muted)"></span>Server working! Checking the database…</div>
+  <p class="secondary">Find the studies that mention <b>A</b> but not <b>B</b> in the
+    <a href="https://neurosynth.org">Neurosynth</a> database (14,371 fMRI studies), by term or by MNI coordinate.</p>
+
+  <section class="card">
+    <div class="tabs" role="tablist">
+      <button role="tab" aria-selected="true" data-tab="terms">By terms</button>
+      <button role="tab" aria-selected="false" data-tab="locations">By locations</button>
+    </div>
+
+    <form id="form-terms" class="row" autocomplete="off">
+      <label>Term A <input class="term" name="a" list="vocab" required value="posterior cingulate"></label>
+      <label>Term B <input class="term" name="b" list="vocab" required value="ventromedial prefrontal"></label>
+      <label>TF-IDF threshold <input class="num" name="threshold" type="number" step="0.001" min="0" max="0.99" value="0.001"></label>
+      <button class="primary" type="submit">Dissociate</button>
+    </form>
+    <form id="form-locations" class="row" autocomplete="off" hidden>
+      <label>Location A (x_y_z) <input class="xyz" name="a" required pattern="\s*-?\d+(\.\d+)?\s*[_, ]\s*-?\d+(\.\d+)?\s*[_, ]\s*-?\d+(\.\d+)?\s*" value="0_-52_26"></label>
+      <label>Location B (x_y_z) <input class="xyz" name="b" required pattern="\s*-?\d+(\.\d+)?\s*[_, ]\s*-?\d+(\.\d+)?\s*[_, ]\s*-?\d+(\.\d+)?\s*" value="-2_50_-6"></label>
+      <label>Radius (mm) <input class="num" name="radius" type="number" step="1" min="1" max="30" value="6"></label>
+      <button class="primary" type="submit">Dissociate</button>
+    </form>
+    <datalist id="vocab"></datalist>
+
+    <div class="examples muted" id="examples"></div>
+  </section>
+
+  <section class="card" id="result" hidden>
+    <div id="summary"></div>
+    <div class="bar" id="bar" role="img"></div>
+    <div class="legend" id="legend"></div>
+    <code class="url" id="url"></code>
+  </section>
+
+  <div class="cols" id="sides"></div>
+
+  <footer class="muted">
+    API: <a href="/docs">interactive docs</a> · <a href="/test_db">/test_db</a> · <a href="/img">/img</a> ·
+    <a href="https://github.com/jwu0330/ns-nano-hw08">source</a> ·
+    based on <a href="https://github.com/spiketren/ns-nano">spiketren/ns-nano</a>.
+    Studies link to PubMed. Characteristic terms/locations are ranked by the z score of the log odds ratio between the two sides.
+  </footer>
+</main>
+
+<script>
+"use strict";
+const $ = (s, el = document) => el.querySelector(s);
+const PAGE = 50;
+const EXAMPLES = {
+  terms: [
+    ["posterior cingulate", "ventromedial prefrontal", "DMN: PCC vs vmPFC"],
+    ["amygdala", "fear", "amygdala without fear"],
+    ["working memory", "attention", "working memory vs attention"],
+  ],
+  locations: [
+    ["0_-52_26", "-2_50_-6", "DMN: PCC vs vmPFC"],
+    ["-22_0_-20", "22_0_-20", "left vs right amygdala"],
+    ["-44_14_28", "-40_-60_40", "left IFJ vs left IPS"],
+  ],
+};
+
+// Build DOM nodes with textContent only: API data is never parsed as HTML.
+function el(tag, attrs = {}, ...kids) {
+  const n = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === "style") n.style.cssText = v; else if (k === "text") n.textContent = v; else n.setAttribute(k, v);
+  }
+  for (const k of kids) if (k != null) n.append(k);
+  return n;
+}
+const fmt = (n) => n.toLocaleString("en-US");
+const xyzText = (v) => Array.isArray(v) ? `[${v.join(", ")}]` : v;
+
+// ---------------------------------------------------------------- server status
+fetch("/test_db").then(r => r.json()).then(j => {
+  const ok = j.ok;
+  $("#status").replaceChildren(
+    el("span", { class: "dot", style: `background:var(${ok ? "--ok" : "--err"})` }),
+    ok ? `Server working · database connected (${fmt(j.metadata_count)} studies, ${fmt(j.coordinates_count)} foci, ${fmt(j.terms_count)} terms)`
+       : `Server working · database error: ${j.error || "unknown"}`);
+}).catch(() => $("#status").lastChild.textContent = "Server working · database check failed");
+
+// ---------------------------------------------------------------- tabs, examples, autocomplete
+let mode = "terms";
+function setMode(m) {
+  mode = m;
+  document.querySelectorAll("[data-tab]").forEach(b => b.setAttribute("aria-selected", b.dataset.tab === m));
+  $("#form-terms").hidden = m !== "terms";
+  $("#form-locations").hidden = m !== "locations";
+  const box = $("#examples");
+  box.replaceChildren("Examples: ");
+  for (const [a, b, label] of EXAMPLES[m]) {
+    const btn = el("button", { type: "button", text: label });
+    btn.onclick = () => { const f = $(`#form-${m}`); f.a.value = a; f.b.value = b; run(); };
+    box.append(btn);
+  }
+}
+document.querySelectorAll("[data-tab]").forEach(b => b.onclick = () => setMode(b.dataset.tab));
+
+let vocabTimer;
+document.querySelectorAll("input.term").forEach(inp => inp.addEventListener("input", () => {
+  clearTimeout(vocabTimer);
+  vocabTimer = setTimeout(async () => {
+    const r = await fetch(`/terms?limit=15&q=${encodeURIComponent(inp.value)}`);
+    if (!r.ok) return;
+    const j = await r.json();
+    $("#vocab").replaceChildren(...j.terms.map(t => el("option", { value: t.term, label: `${t.term} (${t.n_studies} studies)` })));
+  }, 200);
+}));
+
+// ---------------------------------------------------------------- query
+function apiPath(offset = 0) {
+  const f = $(`#form-${mode}`);
+  const enc = (s) => encodeURIComponent(s.trim().replace(/\s*[, ]\s*/g, mode === "locations" ? "_" : " "));
+  const params = new URLSearchParams({ both: "true", analyze: "true", limit: PAGE, offset });
+  if (mode === "terms") params.set("threshold", f.threshold.value || "0.001");
+  else params.set("radius", f.radius.value || "6");
+  return `/dissociate/${mode}/${enc(f.a.value)}/${enc(f.b.value)}?${params}`;
+}
+
+async function getJSON(path) {
+  const r = await fetch(path);
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) {
+    const e = j.error || {};
+    const detail = Array.isArray(j.detail) ? j.detail.map(d => `${d.loc.at(-1)}: ${d.msg}`).join("; ") : "";
+    let msg = e.message || detail || `HTTP ${r.status}`;
+    if (e.hint) msg += ` ${e.hint}`;
+    if (e.suggestions?.length) msg += ` Did you mean: ${e.suggestions.join(", ")}?`;
+    throw new Error(msg);
+  }
+  return j;
+}
+
+let last = null;
+async function run() {
+  const f = $(`#form-${mode}`);
+  if (!f.reportValidity()) return;
+  const btn = $("button[type=submit]", f);
+  btn.disabled = true; btn.textContent = "Searching…";
+  const path = apiPath();
+  history.replaceState(null, "", "#" + path);
+  try {
+    last = { data: await getJSON(path), mode };
+    render(last.data, path);
+  } catch (err) {
+    $("#result").hidden = false;
+    $("#summary").replaceChildren(el("p", { class: "error", text: err.message }));
+    $("#bar").replaceChildren(); $("#legend").replaceChildren(); $("#sides").replaceChildren();
+    $("#url").textContent = location.origin + path;
+  } finally {
+    btn.disabled = false; btn.textContent = "Dissociate";
+  }
+}
+$("#form-terms").onsubmit = $("#form-locations").onsubmit = (e) => { e.preventDefault(); run(); };
+
+// ---------------------------------------------------------------- render
+function render(j, path) {
+  const q = j.query, c = j.counts;
+  const nameA = q.type === "terms" ? `“${q.a}”` : xyzText(q.a);
+  const nameB = q.type === "terms" ? `“${q.b}”` : xyzText(q.b);
+  const rule = q.type === "terms" ? `TF-IDF > ${q.threshold}` : `within ${q.radius_mm} mm`;
+  $("#result").hidden = false;
+  $("#summary").replaceChildren(el("h2", { text: `${nameA} vs ${nameB}` }),
+    el("div", { class: "secondary", text:
+      `${fmt(c.a)} studies mention A, ${fmt(c.b)} mention B (${rule}); ${fmt(c.a_and_b)} mention both.` }));
+
+  const total = c.a_not_b + c.a_and_b + c.b_not_a || 1;
+  const segs = [["A only", c.a_not_b, "--series-a"], ["Both", c.a_and_b, "--both"], ["B only", c.b_not_a, "--series-b"]];
+  $("#bar").setAttribute("aria-label", segs.map(([n, v]) => `${n}: ${v}`).join(", "));
+  $("#bar").replaceChildren(...segs.map(([n, v, col]) =>
+    el("div", { style: `flex:${v / total};background:var(${col})`, title: `${n}: ${fmt(v)} studies (${(100 * v / total).toFixed(1)}%)` })));
+  $("#legend").replaceChildren(...segs.map(([n, v, col]) =>
+    el("span", {}, el("span", { class: "sw", style: `background:var(${col})` }), `${n} ${fmt(v)}`)));
+  $("#url").replaceChildren(el("a", { href: path, target: "_blank", text: location.origin + path }));
+
+  $("#sides").replaceChildren(
+    side(j, "a_not_b", `${nameA} but not ${nameB}`, "--series-a"),
+    side(j, "b_not_a", `${nameB} but not ${nameA}`, "--series-b"));
+}
+
+function side(j, key, title, col) {
+  const d = j[key];
+  const box = el("section", { class: "card side" },
+    el("h2", {}, el("span", { class: "sw", style: `background:var(${col})` }), title),
+    el("div", { class: "secondary", text: `${fmt(d.count)} studies` }));
+
+  const ct = j.characteristic_terms?.[key] || [];
+  if (ct.length) {
+    box.append(el("div", { class: "muted", text: "Characteristic terms" }),
+      el("div", { class: "chips" }, ...ct.map(t => el("span", { class: "chip",
+        title: `${(100 * t.p_a).toFixed(1)}% of A-only vs ${(100 * t.p_b).toFixed(1)}% of B-only studies · z = ${t.z}` },
+        el("b", { text: t.term }), ` z ${Math.abs(t.z).toFixed(1)}`))));
+  }
+  const cl = j.characteristic_locations?.[key] || [];
+  if (cl.length) {
+    box.append(el("div", { class: "muted", text: "Characteristic locations (10 mm cells, MNI)" }),
+      el("table", { class: "locs" },
+        el("tr", {}, ...["center", "this side", "other side", "z"].map(h => el("th", { text: h }))),
+        ...cl.slice(0, 5).map(r => el("tr", {},
+          el("td", { text: xyzText(r.center) }),
+          el("td", { text: `${(100 * r.p_a).toFixed(0)}%` }),
+          el("td", { text: `${(100 * r.p_b).toFixed(0)}%` }),
+          el("td", { text: Math.abs(r.z).toFixed(1) })))));
+  }
+  const list = el("ol", { class: "studies" });
+  addStudies(list, d.studies);
+  box.append(list);
+  if (d.count > d.studies.length) {
+    const more = el("button", { type: "button", text: `Show more (${fmt(d.count - d.studies.length)} left)` });
+    let offset = d.studies.length;
+    more.onclick = async () => {
+      more.disabled = true;
+      const next = (await getJSON(apiPath(offset).replace("analyze=true", "analyze=false")))[key];
+      addStudies(list, next.studies); offset += next.studies.length;
+      more.disabled = false;
+      if (offset >= d.count) more.remove(); else more.textContent = `Show more (${fmt(d.count - offset)} left)`;
+    };
+    box.append(more);
+  }
+  return box;
+}
+
+function addStudies(list, studies) {
+  for (const s of studies) {
+    list.append(el("li", {},
+      el("a", { href: `https://pubmed.ncbi.nlm.nih.gov/${encodeURIComponent(s.study_id)}/`, target: "_blank", rel: "noopener", text: s.title || s.study_id }),
+      el("div", { class: "meta", text: `${s.authors || ""} · ${s.journal || ""} · ${s.year ?? ""}` })));
+  }
+}
+
+// ---------------------------------------------------------------- restore from URL hash
+(function init() {
+  const m = decodeURIComponent(location.hash).match(/^#\/dissociate\/(terms|locations)\/([^/]+)\/([^/?]+)\?(.*)$/);
+  setMode(m ? m[1] : "terms");
+  if (m) {
+    const f = $(`#form-${m[1]}`), p = new URLSearchParams(m[4]);
+    f.a.value = m[2]; f.b.value = m[3];
+    if (p.get("threshold") && f.threshold) f.threshold.value = p.get("threshold");
+    if (p.get("radius") && f.radius) f.radius.value = p.get("radius");
+    run();
+  }
+})();
+</script>
+</body>
+</html>

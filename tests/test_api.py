@@ -46,12 +46,18 @@ def test_analyze_terms(client):
     ct = j["characteristic_terms"]
     a_terms = [t["term"] for t in ct["a_not_b"]]
     b_terms = [t["term"] for t in ct["b_not_a"]]
-    assert "posterior cingulate" not in a_terms + b_terms  # the query terms are excluded
+    words = {"posterior", "cingulate", "ventromedial", "prefrontal"}
+    assert not any(words & set(t.split()) for t in a_terms + b_terms)  # query terms and near-synonyms excluded
     assert all(t["z"] > 0 for t in ct["a_not_b"]) and all(t["z"] < 0 for t in ct["b_not_a"])
     assert "reward" in b_terms or "value" in b_terms  # vmPFC side is about valuation
     locs = j["characteristic_locations"]
+    for side in locs.values():
+        for cell in side:
+            assert all(isinstance(v, int) and v % 10 == 0 for v in cell["center"])  # 10 mm grid
+            assert set(cell) == {"center", "n_a", "n_b", "p_a", "p_b", "log_odds", "z"}
     assert locs["a_not_b"][0]["center"][1] < 0  # PCC side peaks posterior
     assert locs["b_not_a"][0]["center"][1] > 0  # vmPFC side peaks anterior
+    assert all(c["z"] > 0 for c in locs["a_not_b"]) and all(c["z"] < 0 for c in locs["b_not_a"])
 
 
 @pytest.mark.parametrize("path,status", [

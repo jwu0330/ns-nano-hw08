@@ -119,7 +119,10 @@ def characteristic_terms(
     exclude: Iterable[str] = (),
     k: int = 10,
 ) -> dict[str, list[dict]]:
-    """Terms over-represented in A\\B relative to B\\A (and vice versa)."""
+    """Terms over-represented in A\\B relative to B\\A (and vice versa).
+
+    ``exclude`` lists the query terms; any term sharing a word with them is left out.
+    """
     if not a_only or not b_only:
         return {"a_not_b": [], "b_not_a": []}
     rows = conn.execute(
@@ -140,7 +143,11 @@ def characteristic_terms(
         },
     ).mappings()
     min_count = max(3, math.ceil(0.02 * min(len(a_only), len(b_only))))
-    return _rank([dict(r) for r in rows], len(a_only), len(b_only), k, min_count)
+    # Drop near-synonyms of the query terms ("cingulate cortex" for "posterior
+    # cingulate"): they separate the sides trivially and say nothing new.
+    query_words = {w for t in exclude for w in t.split()}
+    rows = [dict(r) for r in rows if not query_words & set(r["term"].split())]
+    return _rank(rows, len(a_only), len(b_only), k, min_count)
 
 
 def characteristic_locations(
@@ -155,8 +162,8 @@ def characteristic_locations(
         return {"a_not_b": [], "b_not_a": []}
     rows = conn.execute(
         text(
-            "SELECT round(x / :c)::int * :c AS x, round(y / :c)::int * :c AS y, "
-            "       round(z / :c)::int * :c AS z, "
+            "SELECT round(x / :c)::int * :c AS gx, round(y / :c)::int * :c AS gy, "
+            "       round(z / :c)::int * :c AS gz, "
             "  count(DISTINCT study_id) FILTER (WHERE study_id = ANY(:a)) AS n_a, "
             "  count(DISTINCT study_id) FILTER (WHERE study_id = ANY(:b)) AS n_b "
             "FROM ns.coordinates WHERE study_id = ANY(:ab) GROUP BY 1, 2, 3"
@@ -167,5 +174,5 @@ def characteristic_locations(
     ranked = _rank([dict(r) for r in rows], len(a_only), len(b_only), k, min_count)
     for side in ranked.values():
         for r in side:
-            r["center"] = [r.pop("x"), r.pop("y"), r.pop("z")]
+            r["center"] = [r.pop("gx"), r.pop("gy"), r.pop("gz")]
     return ranked

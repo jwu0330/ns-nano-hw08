@@ -9,7 +9,6 @@ Definitions (Neurosynth conventions, both adjustable per request):
 
 from __future__ import annotations
 
-import math
 from typing import Iterable
 
 from sqlalchemy import Connection, text
@@ -81,98 +80,3 @@ def study_details(conn: Connection, ids: Iterable[str], limit: int | None, offse
         {"ids": ids, "limit": limit, "offset": offset},
     ).mappings()
     return [dict(r) for r in rows]
-
-
-# ------------------------------------------------------------------ contrast statistics
-def _log_odds(n_a: int, size_a: int, n_b: int, size_b: int) -> tuple[float, float]:
-    """Log odds ratio (Haldane +0.5 correction) and its z score."""
-    a, b = n_a + 0.5, size_a - n_a + 0.5
-    c, d = n_b + 0.5, size_b - n_b + 0.5
-    lor = math.log(a / b) - math.log(c / d)
-    se = math.sqrt(1 / a + 1 / b + 1 / c + 1 / d)
-    return lor, lor / se
-
-
-def _rank(rows: list[dict], size_a: int, size_b: int, k: int, min_count: int) -> dict[str, list[dict]]:
-    scored = []
-    for r in rows:
-        lor, z = _log_odds(r["n_a"], size_a, r["n_b"], size_b)
-        r.update(
-            p_a=round(r["n_a"] / size_a, 4),
-            p_b=round(r["n_b"] / size_b, 4),
-            log_odds=round(lor, 3),
-            z=round(z, 2),
-        )
-        scored.append(r)
-    a_side = [r for r in scored if r["n_a"] >= min_count and r["z"] > 0]
-    b_side = [r for r in scored if r["n_b"] >= min_count and r["z"] < 0]
-    a_side.sort(key=lambda r: -r["z"])
-    b_side.sort(key=lambda r: r["z"])
-    return {"a_not_b": a_side[:k], "b_not_a": b_side[:k]}
-
-
-def characteristic_terms(
-    conn: Connection,
-    a_only: frozenset[str],
-    b_only: frozenset[str],
-    threshold: float,
-    exclude: Iterable[str] = (),
-    k: int = 10,
-) -> dict[str, list[dict]]:
-    """Terms over-represented in A\\B relative to B\\A (and vice versa).
-
-    ``exclude`` lists the query terms; any term sharing a word with them is left out.
-    """
-    if not a_only or not b_only:
-        return {"a_not_b": [], "b_not_a": []}
-    rows = conn.execute(
-        text(
-            "SELECT term, "
-            "  count(*) FILTER (WHERE study_id = ANY(:a)) AS n_a, "
-            "  count(*) FILTER (WHERE study_id = ANY(:b)) AS n_b "
-            "FROM ns.annotations_terms "
-            "WHERE study_id = ANY(:ab) AND weight > :threshold AND NOT (term = ANY(:exclude)) "
-            "GROUP BY term"
-        ),
-        {
-            "a": list(a_only),
-            "b": list(b_only),
-            "ab": list(a_only | b_only),
-            "threshold": threshold,
-            "exclude": list(exclude),
-        },
-    ).mappings()
-    min_count = max(3, math.ceil(0.02 * min(len(a_only), len(b_only))))
-    # Drop near-synonyms of the query terms ("cingulate cortex" for "posterior
-    # cingulate"): they separate the sides trivially and say nothing new.
-    query_words = {w for t in exclude for w in t.split()}
-    rows = [dict(r) for r in rows if not query_words & set(r["term"].split())]
-    return _rank(rows, len(a_only), len(b_only), k, min_count)
-
-
-def characteristic_locations(
-    conn: Connection,
-    a_only: frozenset[str],
-    b_only: frozenset[str],
-    cell_mm: int = 10,
-    k: int = 10,
-) -> dict[str, list[dict]]:
-    """Brain cells (cell_mm cubes) reported more often by A\\B than by B\\A studies."""
-    if not a_only or not b_only:
-        return {"a_not_b": [], "b_not_a": []}
-    rows = conn.execute(
-        text(
-            "SELECT round(x / :c)::int * :c AS gx, round(y / :c)::int * :c AS gy, "
-            "       round(z / :c)::int * :c AS gz, "
-            "  count(DISTINCT study_id) FILTER (WHERE study_id = ANY(:a)) AS n_a, "
-            "  count(DISTINCT study_id) FILTER (WHERE study_id = ANY(:b)) AS n_b "
-            "FROM ns.coordinates WHERE study_id = ANY(:ab) GROUP BY 1, 2, 3"
-        ),
-        {"a": list(a_only), "b": list(b_only), "ab": list(a_only | b_only), "c": cell_mm},
-    ).mappings()
-    min_count = max(3, math.ceil(0.02 * min(len(a_only), len(b_only))))
-    ranked = _rank([dict(r) for r in rows], len(a_only), len(b_only), k, min_count)
-    for side in ranked.values():
-        for r in side:
-            r["center"] = [r.pop("gx"), r.pop("gy"), r.pop("gz")]
-    return ranked

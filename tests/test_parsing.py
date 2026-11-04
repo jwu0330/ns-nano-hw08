@@ -3,7 +3,7 @@ import math
 import pytest
 
 from nsapi.parsing import InputError, fmt_coords, normalize_term, parse_coords
-from nsapi.queries import _log_odds
+from nsapi.analysis import log_odds as _log_odds
 
 
 @pytest.mark.parametrize("text,xyz", [

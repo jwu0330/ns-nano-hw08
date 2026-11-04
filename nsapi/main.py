@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import logging
+import threading
 import time
+from contextlib import asynccontextmanager
 from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Any
@@ -13,6 +16,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from sqlalchemy import text
 
+from . import analysis
 from . import queries as q
 from .db import get_engine
 from .parsing import InputError, fmt_coords, normalize_term, parse_coords
@@ -20,7 +24,25 @@ from .parsing import InputError, fmt_coords, normalize_term, parse_coords
 STATIC = Path(__file__).resolve().parent / "static"
 VERSION = "1.0.0"
 
+log = logging.getLogger("nsapi")
+
+
+def _warm_up() -> None:
+    try:
+        analysis._loader.get()
+    except Exception:  # the first analyze request will retry and report the error
+        log.exception("analysis index warm-up failed")
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    # Load the analysis index in the background so startup is not delayed.
+    threading.Thread(target=_warm_up, daemon=True).start()
+    yield
+
+
 app = FastAPI(
+    lifespan=lifespan,
     title="Neurosynth Dissociation API",
     version=VERSION,
     description=(
@@ -122,10 +144,10 @@ def _dissociation(
         out["a_not_b"] = _direction(conn, a_only, limit, offset)
         if both:
             out["b_not_a"] = _direction(conn, b_only, limit, offset)
-        if analyze:
-            out["characteristic_terms"] = q.characteristic_terms(conn, a_only, b_only, threshold, term_exclude)
-            if with_locations:
-                out["characteristic_locations"] = q.characteristic_locations(conn, a_only, b_only)
+    if analyze:
+        out["characteristic_terms"] = analysis.characteristic_terms(a_only, b_only, threshold, term_exclude)
+        if with_locations:
+            out["characteristic_locations"] = analysis.characteristic_locations(a_only, b_only)
     return out
 
 

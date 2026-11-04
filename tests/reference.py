@@ -48,3 +48,14 @@ class Reference:
     def dissociate_locations(self, a, b, radius: float = 6.0) -> tuple[set[str], set[str]]:
         sa, sb = self.studies_near(a, radius), self.studies_near(b, radius)
         return sa - sb, sb - sa
+
+    # ---- counts behind the optional analysis (characteristic terms / locations)
+    def term_count(self, studies: set[str], term: str, threshold: float = 0.001) -> int:
+        return int((self.ann.loc[sorted(studies), term].to_numpy() > threshold).sum())
+
+    def cell_count(self, studies: set[str], center: tuple[int, int, int], cell_mm: int = 10) -> int:
+        """Studies with a focus whose nearest 10 mm grid point is ``center``."""
+        c = self.coords[self.coords["study_id"].isin(studies)]
+        grid = np.rint(c[["x", "y", "z"]].to_numpy() / cell_mm) * cell_mm
+        hit = (grid == np.asarray(center)).all(axis=1)
+        return int(c["study_id"][hit].nunique())

@@ -10,7 +10,11 @@ three issues found in it:
 2. MNI coordinates are millimetres, not longitude/latitude, so geometries use
    SRID 0 (plain Cartesian) instead of 4326.
 3. Distance queries use ``ST_3DDWithin``, which needs an n-D GiST index
-   (``gist_geometry_ops_nd``); the default 2-D index cannot serve it.
+   (``gist_geometry_ops_nd``); with the default 2-D index the lookup is ~130x slower.
+
+It also stores a compact sparse index (``ns.artifacts``) that the optional
+analysis uses, because aggregating ~10^5 rows per request is too slow on a
+free-tier database.
 
 Tables keep the teacher's names (``ns.coordinates``, ``ns.metadata``,
 ``ns.annotations_terms``) so his ``/test_db`` query still works.
@@ -89,6 +93,53 @@ def melt_terms(ann: pd.DataFrame) -> pd.DataFrame:
     })
 
 
+CELL_MM = 10  # grid used by the "characteristic locations" analysis
+
+
+def build_index(meta: pd.DataFrame, coords: pd.DataFrame, terms: pd.DataFrame) -> bytes:
+    """Compact in-memory index for the analysis endpoints (stored in ns.artifacts).
+
+    Two sparse study-by-feature matrices in CSR layout, rows = studies in
+    ``study_ids`` order:
+    * terms: column = term id, value = TF-IDF weight (float64, same as the table);
+    * cells: column = id of the 10 mm grid cell (nearest grid point) holding at
+      least one of the study's foci.
+    The analysis then counts features over a set of studies with one bincount,
+    instead of aggregating ~10^5 rows in PostgreSQL per request.
+    """
+    def strings(values) -> np.ndarray:  # fixed-width unicode, loadable without pickle
+        return np.asarray(list(values), dtype=str)
+
+    study_ids = np.sort(strings(meta["study_id"]))
+    vocab = np.sort(strings(terms["term"].unique()))
+
+    s_idx = np.searchsorted(study_ids, strings(terms["study_id"]))
+    t_idx = np.searchsorted(vocab, strings(terms["term"]))
+    order = np.lexsort((t_idx, s_idx))
+    term_ptr = np.concatenate([[0], np.cumsum(np.bincount(s_idx, minlength=len(study_ids)))])
+
+    grid = np.rint(coords[["x", "y", "z"]].to_numpy(dtype=float) / CELL_MM).astype(np.int16) * CELL_MM
+    cells, cell_of_focus = np.unique(grid, axis=0, return_inverse=True)
+    c_study = np.searchsorted(study_ids, strings(coords["study_id"]))
+    pairs = np.unique(np.stack([c_study, cell_of_focus.ravel()], axis=1), axis=0)  # one per study and cell
+    cell_ptr = np.concatenate([[0], np.cumsum(np.bincount(pairs[:, 0], minlength=len(study_ids)))])
+
+    buf = io.BytesIO()
+    np.savez_compressed(
+        buf,
+        study_ids=study_ids,
+        vocab=vocab,
+        term_ptr=term_ptr.astype(np.int32),
+        term_idx=t_idx[order].astype(np.int16),
+        term_w=terms["weight"].to_numpy()[order].astype(np.float64),
+        cells=cells.astype(np.int16),
+        cell_ptr=cell_ptr.astype(np.int32),
+        cell_idx=pairs[:, 1].astype(np.int32),
+        cell_mm=np.int16(CELL_MM),
+    )
+    return buf.getvalue()
+
+
 # ---------------------------------------------------------------- write
 def copy_df(cur: psycopg.Cursor, table: str, df: pd.DataFrame) -> None:
     buf = io.StringIO()
@@ -136,6 +187,7 @@ CREATE TABLE {STAGE}.annotations_terms (
 );
 
 CREATE TABLE {STAGE}.build_info (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE {STAGE}.artifacts (name TEXT PRIMARY KEY, data BYTEA NOT NULL);
 """
 
 INDEXES = f"""
@@ -199,6 +251,9 @@ def main() -> int:
             copy_df(cur, f"{STAGE}.annotations_terms", terms)
             log("building indexes and the term table")
             cur.execute(INDEXES)
+            index_blob = build_index(meta, coords, terms)
+            cur.execute(f"INSERT INTO {STAGE}.artifacts VALUES ('analysis_index', %s)", (index_blob,))
+            log(f"stored analysis index ({len(index_blob) / 1e6:.1f} MB)")
 
             got = {t: cur.execute(f"SELECT count(*) FROM {STAGE}.{t}").fetchone()[0] for t in expected}
             if got != expected:

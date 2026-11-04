@@ -57,3 +57,25 @@ def test_single_set_endpoints_match_reference(client, ref):
     assert ids(j) == ref.studies_with_term("amygdala")
     j = client.get("/locations/-22_0_-20/studies", params={"radius": 8}).json()
     assert ids(j) == ref.studies_near((-22, 0, -20), 8)
+
+
+@pytest.mark.parametrize("a,b,thr", [("posterior cingulate", "ventromedial prefrontal", 0.001), ("reward", "pain", 0.05)])
+def test_characteristic_counts_match_reference(client, ref, a, b, thr):
+    j = client.get(f"/dissociate/terms/{a}/{b}", params={"threshold": thr, "analyze": True, "limit": 1}).json()
+    ab, ba = ref.dissociate_terms(a, b, thr)
+    for side in ("a_not_b", "b_not_a"):
+        assert j["characteristic_terms"][side], side
+        for t in j["characteristic_terms"][side]:
+            assert t["n_a"] == ref.term_count(ab, t["term"], thr), t
+            assert t["n_b"] == ref.term_count(ba, t["term"], thr), t
+        for cell in j["characteristic_locations"][side]:
+            assert cell["n_a"] == ref.cell_count(ab, cell["center"]), cell
+            assert cell["n_b"] == ref.cell_count(ba, cell["center"]), cell
+
+
+def test_characteristic_terms_for_locations_match_reference(client, ref):
+    j = client.get("/dissociate/locations/0_-52_26/-2_50_-6", params={"analyze": True, "limit": 1}).json()
+    ab, ba = ref.dissociate_locations((0, -52, 26), (-2, 50, -6))
+    for side in ("a_not_b", "b_not_a"):
+        for t in j["characteristic_terms"][side]:
+            assert (t["n_a"], t["n_b"]) == (ref.term_count(ab, t["term"]), ref.term_count(ba, t["term"]))

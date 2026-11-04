@@ -269,6 +269,13 @@ def main() -> int:
                 "srid": "0 (MNI millimetres)",
             }
             cur.executemany(f"INSERT INTO {STAGE}.build_info VALUES (%s, %s)", list(info.items()))
+            # the staged schema must answer a real location query before it goes live
+            n_near = cur.execute(
+                f"SELECT count(DISTINCT study_id) FROM {STAGE}.coordinates "
+                "WHERE ST_3DDWithin(geom, ST_MakePoint(0, -52, 26), 6)"
+            ).fetchone()[0]
+            if not n_near:
+                raise RuntimeError("check failed: no studies near [0, -52, 26] in the staged schema")
             conn.commit()
 
             log("swapping staging schema into place")
@@ -285,13 +292,6 @@ def main() -> int:
         for t in ("metadata", "coordinates", "annotations_terms", "terms"):
             conn.execute(f"ANALYZE {SCHEMA}.{t}")
         size = conn.execute("SELECT pg_size_pretty(pg_database_size(current_database()))").fetchone()[0]
-        # the swapped-in schema must still be queryable end to end
-        n_near = conn.execute(
-            f"SELECT count(DISTINCT study_id) FROM {SCHEMA}.coordinates "
-            "WHERE ST_3DDWithin(geom, ST_MakePoint(0, -52, 26), 6)"
-        ).fetchone()[0]
-        if not n_near:
-            raise RuntimeError("post-load check failed: no studies near [0, -52, 26]")
 
     log(f"done in {time.time() - t0:.0f}s; rows {got}; database size {size}")
     log("restart the web service so its caches and analysis index pick up the new data")

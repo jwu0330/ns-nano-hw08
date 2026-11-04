@@ -130,3 +130,7 @@ def test_stats(client):
 
 def test_nul_in_search_is_harmless(client):
     assert client.get("/terms", params={"q": "a\x00b"}).status_code == 200
+
+
+def test_search_ignores_odd_characters(client):
+    assert client.get("/terms", params={"q": "amyg%"}).json()["query"] == "amyg"

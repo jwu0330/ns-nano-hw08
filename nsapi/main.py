@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import threading
 import time
 from contextlib import asynccontextmanager
@@ -18,7 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from sqlalchemy import text
-from sqlalchemy.exc import DBAPIError, TimeoutError as PoolTimeout
+from sqlalchemy.exc import InterfaceError, OperationalError, TimeoutError as PoolTimeout
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from . import analysis
@@ -86,16 +87,29 @@ async def _invalid(_: Request, exc: RequestValidationError) -> JSONResponse:
     return JSONResponse(status_code=422, content={"error": {"message": message, "details": details}})
 
 
-@app.exception_handler(DBAPIError)
+# Transient conditions -> 503 (retry). Connection loss, statement timeout, a full pool,
+# or data reloaded under a running service (caches are dropped so the retry reloads).
+@app.exception_handler(OperationalError)
+@app.exception_handler(InterfaceError)
 @app.exception_handler(PoolTimeout)
 @app.exception_handler(analysis.StaleIndex)
 async def _unavailable(_: Request, exc: Exception) -> JSONResponse:
     log.warning("service unavailable: %r", exc)
+    if isinstance(exc, analysis.StaleIndex):
+        _term_set.cache_clear()
+        _near_set.cache_clear()
+        analysis.reset()
     return JSONResponse(
         status_code=503,
         content={"error": {"message": "The database is busy or was just reloaded; please retry in a moment."}},
         headers={"Retry-After": "10"},
     )
+
+
+@app.exception_handler(Exception)
+async def _bug(_: Request, exc: Exception) -> JSONResponse:
+    log.exception("unhandled error")  # real bugs are logged in full and not disguised as "retry"
+    return JSONResponse(status_code=500, content={"error": {"message": "Internal server error."}})
 
 
 @app.exception_handler(StarletteHTTPException)
@@ -270,9 +284,9 @@ def list_terms(
     limit: Annotated[int, Query(ge=1, le=500)] = 20,
 ) -> dict[str, Any]:
     """Search the term vocabulary (used for autocomplete)."""
-    try:
-        query = normalize_term(q_)
-    except InputError:  # empty after normalisation: list the most common terms
+    try:  # ignore characters no term contains (e.g. "amyg%" searches "amyg")
+        query = normalize_term(re.sub(r"[^\w\s'-]", "", q_))
+    except InputError:  # nothing left: list the most common terms
         query = ""
     with get_engine().connect() as conn:
         return {"query": query, "terms": q.search_terms(conn, query, limit)}

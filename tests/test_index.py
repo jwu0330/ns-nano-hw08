@@ -54,3 +54,12 @@ def test_cells_round_halves_up_and_count_studies_once(index):
 def test_unknown_study_is_reported_as_stale(index):
     with pytest.raises(StaleIndex):
         index.term_counts({"s1", "nope"}, 0.001)
+
+
+def test_stale_index_resets_and_reloads(monkeypatch):
+    from nsapi import analysis
+
+    loads = []
+    monkeypatch.setattr(analysis._Loader, "index", property(lambda self: loads.append(1) or "idx"))
+    analysis.reset()  # no cached index: must not fail
+    assert analysis._loader.get() == "idx" and loads == [1]

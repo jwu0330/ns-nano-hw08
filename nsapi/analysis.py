@@ -89,6 +89,12 @@ class _Loader:
 _loader = _Loader()
 
 
+def reset() -> None:
+    """Forget the loaded index (after a database reload); the next request loads it again."""
+    with _loader._lock:
+        _loader.__dict__.pop("index", None)
+
+
 # ------------------------------------------------------------------ statistics
 def log_odds(n_a: int, size_a: int, n_b: int, size_b: int) -> tuple[float, float]:
     """Log odds ratio (Haldane +0.5 correction) and its z score."""

@@ -199,8 +199,7 @@ async function getJSON(path) {
   const j = await r.json().catch(() => ({}));
   if (!r.ok) {
     const e = j.error || {};
-    const detail = Array.isArray(j.detail) ? j.detail.map(d => `${d.loc.at(-1)}: ${d.msg}`).join("; ") : "";
-    let msg = e.message || detail || `HTTP ${r.status}`;
+    let msg = e.message || `HTTP ${r.status}`;
     if (e.hint) msg += ` ${e.hint}`;
     if (e.suggestions?.length) msg += ` Did you mean: ${e.suggestions.join(", ")}?`;
     throw new Error(msg);

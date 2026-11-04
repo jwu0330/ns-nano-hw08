@@ -7,6 +7,7 @@ import re
 _NUM = r"[-+]?\d+(?:\.\d+)?"
 _COORDS = re.compile(rf"^\s*({_NUM})\s*[_,]\s*({_NUM})\s*[_,]\s*({_NUM})\s*$")
 MNI_LIMIT = 150.0  # mm; generously larger than the MNI bounding box
+MAX_TERM = 60  # longest vocabulary term has 31 characters
 
 
 class InputError(ValueError):
@@ -40,6 +41,8 @@ def normalize_term(text: str) -> str:
     term = re.sub(r"[_+\s]+", " ", text).strip().lower()
     if not term:
         raise InputError("Empty term.", "Give a Neurosynth term, e.g. amygdala.")
+    if len(term) > MAX_TERM:
+        raise InputError(f"Term is longer than {MAX_TERM} characters.", "Give a Neurosynth term, e.g. amygdala.")
     return term
 
 

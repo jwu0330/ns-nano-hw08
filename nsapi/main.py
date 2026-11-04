@@ -11,10 +11,13 @@ from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import FastAPI, Query, Request
+from fastapi import Path as PathParam
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from sqlalchemy import text
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from . import analysis
 from . import queries as q
@@ -73,6 +76,20 @@ async def _not_found(_: Request, exc: NotFound) -> JSONResponse:
     )
 
 
+# Every error has the same shape: {"error": {"message": ..., ...}}.
+@app.exception_handler(RequestValidationError)
+async def _invalid(_: Request, exc: RequestValidationError) -> JSONResponse:
+    details = [{"parameter": ".".join(map(str, e["loc"][1:])) or str(e["loc"][0]), "problem": e["msg"]} for e in exc.errors()]
+    message = "; ".join(f"{d['parameter']}: {d['problem']}" for d in details)
+    return JSONResponse(status_code=422, content={"error": {"message": message, "details": details}})
+
+
+@app.exception_handler(StarletteHTTPException)
+async def _http_error(_: Request, exc: StarletteHTTPException) -> JSONResponse:
+    message = "No such endpoint. See /docs." if exc.status_code == 404 else str(exc.detail)
+    return JSONResponse(status_code=exc.status_code, content={"error": {"message": message}}, headers=exc.headers)
+
+
 @app.middleware("http")
 async def _timing_and_cache(request: Request, call_next):
     t0 = time.perf_counter()
@@ -95,6 +112,10 @@ Both = Annotated[bool, Query(description="Also return the opposite direction (B 
 Analyze = Annotated[bool, Query(description="Add terms (and, for term queries, brain locations) that characterise each side.")]
 Limit = Annotated[int | None, Query(ge=1, le=20000, description="Maximum studies listed per direction (default: all).")]
 Offset = Annotated[int, Query(ge=0, description="Skip this many studies (for paging).")]
+TermA = Annotated[str, PathParam(description="Term A (spaces or `_`).", openapi_examples={"PCC": {"value": "posterior cingulate"}})]
+TermB = Annotated[str, PathParam(description="Term B (spaces or `_`).", openapi_examples={"vmPFC": {"value": "ventromedial prefrontal"}})]
+CoordsA = Annotated[str, PathParam(description="Location A as `x_y_z` (MNI mm).", openapi_examples={"PCC": {"value": "0_-52_26"}})]
+CoordsB = Annotated[str, PathParam(description="Location B as `x_y_z` (MNI mm).", openapi_examples={"vmPFC": {"value": "-2_50_-6"}})]
 
 
 # Study-id sets are pure functions of the (static) database, so they are memoised.
@@ -154,8 +175,8 @@ def _dissociation(
 # ------------------------------------------------------------------ assignment endpoints
 @app.get("/dissociate/terms/{term_a}/{term_b}", tags=["dissociation"])
 def dissociate_terms(
-    term_a: str,
-    term_b: str,
+    term_a: TermA,
+    term_b: TermB,
     threshold: Threshold = 0.001,
     both: Both = False,
     analyze: Analyze = False,
@@ -180,8 +201,8 @@ def dissociate_terms(
 
 @app.get("/dissociate/locations/{coords_a}/{coords_b}", tags=["dissociation"])
 def dissociate_locations(
-    coords_a: str,
-    coords_b: str,
+    coords_a: CoordsA,
+    coords_b: CoordsB,
     radius: Radius = 6.0,
     both: Both = False,
     analyze: Analyze = False,
@@ -231,7 +252,10 @@ def list_terms(
     limit: Annotated[int, Query(ge=1, le=500)] = 20,
 ) -> dict[str, Any]:
     """Search the term vocabulary (used for autocomplete)."""
-    query = normalize_term(q_) if q_.strip() else ""
+    try:
+        query = normalize_term(q_)
+    except InputError:  # empty after normalisation: list the most common terms
+        query = ""
     with get_engine().connect() as conn:
         return {"query": query, "terms": q.search_terms(conn, query, limit)}
 

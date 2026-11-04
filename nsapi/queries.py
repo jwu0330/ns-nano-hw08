@@ -40,11 +40,11 @@ def term_exists(conn: Connection, term: str) -> bool:
 
 
 def suggest_terms(conn: Connection, term: str, k: int = 5) -> list[str]:
-    """Closest vocabulary entries (trigram similarity, then substring)."""
+    """Closest vocabulary entries (trigram similarity or substring; no LIKE wildcards)."""
     rows = conn.execute(
         text(
             "SELECT term FROM ns.terms "
-            "WHERE term % :t OR term LIKE '%' || :t || '%' "
+            "WHERE term % :t OR strpos(term, :t) > 0 "
             "ORDER BY similarity(term, :t) DESC, n_studies DESC LIMIT :k"
         ),
         {"t": term, "k": k},
@@ -56,8 +56,8 @@ def search_terms(conn: Connection, q: str, limit: int) -> list[dict]:
     rows = conn.execute(
         text(
             "SELECT term, n_studies FROM ns.terms "
-            "WHERE (:q = '' OR term LIKE '%' || :q || '%' OR term % :q) "
-            "ORDER BY (term LIKE :q || '%') DESC, similarity(term, :q) DESC, n_studies DESC, term "
+            "WHERE (:q = '' OR strpos(term, :q) > 0 OR term % :q) "
+            "ORDER BY (strpos(term, :q) = 1) DESC, similarity(term, :q) DESC, n_studies DESC, term "
             "LIMIT :limit"
         ),
         {"q": q, "limit": limit},

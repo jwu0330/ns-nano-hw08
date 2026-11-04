@@ -70,12 +70,14 @@ def test_analyze_terms(client):
     (DMN_LOCS + "?radius=100", 422),
     (DMN_TERMS + "?threshold=-1", 422),
     (DMN_TERMS + "?limit=0", 422),
+    (DMN_TERMS + "?threshold=nan", 422),
+    ("/dissociate/terms/" + "a" * 500 + "/fear", 400),
+    ("/no/such/endpoint", 404),
 ])
 def test_errors(client, path, status):
     r = client.get(path)
     assert r.status_code == status
-    if status in (400, 404):
-        assert "message" in r.json()["error"]
+    assert r.json()["error"]["message"]  # one error shape for every status
 
 
 def test_suggestions(client):
@@ -92,3 +94,13 @@ def test_cors_and_cache_headers(client):
     r = client.get(DMN_LOCS, headers={"Origin": "https://example.org"})
     assert r.headers["access-control-allow-origin"] == "*"
     assert "max-age" in r.headers["cache-control"]
+
+
+def test_term_search_has_no_wildcards(client):
+    assert client.get("/terms", params={"q": "%"}).json()["terms"] == []
+    assert client.get("/terms", params={"q": "_"}).status_code == 200  # empty query lists common terms
+
+
+def test_long_term_is_not_echoed(client):
+    r = client.get("/dissociate/terms/" + "a" * 500 + "/fear")
+    assert len(r.content) < 300

@@ -1,117 +1,77 @@
-# HW08 Neurosynth 後端說明
+# Neurosynth 功能解離後端
 
-## 繳交內容
+NTU Psychoinformatics HW08
 
-1. **網址**：<https://ns-nano-hw08.onrender.com>
-2. **程式**：`作業八_吳季穎_20261105.zip`（也公開在 <https://github.com/jwu0330/ns-nano-hw08>）
+網址：<https://ns-nano-hw08.onrender.com>
+程式：`作業八_吳季穎_20261105.zip`，同時放在 GitHub：<https://github.com/jwu0330/ns-nano-hw08>
 
-> 網站用 Render 免費方案，閒置一段時間會休眠，**第一次打開要等約 1 分鐘**，之後就正常。
+網站使用 Render 免費方案，閒置後會進入休眠，第一次開啟約需等待一分鐘。
 
-## 操作方法
+## 使用方式
 
-### 1. 直接看 API 結果
+首頁上方列出兩個查詢的網址格式與範例連結，點選後會顯示 JSON 結果：
 
-打開網址，首頁最上方的「API」區塊有範例連結，點了會在新分頁顯示 JSON：
+- 詞彙查詢 `/dissociate/terms/{詞A}/{詞B}`：回傳提到詞 A、但沒有提到詞 B 的研究。
+  範例：<https://ns-nano-hw08.onrender.com/dissociate/terms/posterior_cingulate/ventromedial_prefrontal>
+- 座標查詢 `/dissociate/locations/{x_y_z}/{x_y_z}`：回傳在座標 A 附近有活化、但在座標 B 附近沒有活化的研究。
+  範例：<https://ns-nano-hw08.onrender.com/dissociate/locations/0_-52_26/-2_50_-6>
 
-| 作業要求的查詢 | 範例 |
-|---|---|
-| `/dissociate/terms/{詞A}/{詞B}`：提到 A、沒提到 B 的研究 | [PCC 但沒有 vmPFC](https://ns-nano-hw08.onrender.com/dissociate/terms/posterior_cingulate/ventromedial_prefrontal) |
-| `/dissociate/locations/{x_y_z}/{x_y_z}`：在座標 A 有活化、在座標 B 沒有的研究 | [0_-52_26 但沒有 -2_50_-6](https://ns-nano-hw08.onrender.com/dissociate/locations/0_-52_26/-2_50_-6) |
+回傳結果中，`a_not_b.count` 是研究篇數，`a_not_b.studies` 是研究清單，包含 PMID、標題、作者、期刊與年份。網址後面可以加上參數：`both=true` 同時查詢反方向，`threshold` 與 `radius` 調整判定標準，`limit` 與 `offset` 用於分頁（預設每個方向最多列出 1,000 篇）。
 
-JSON 裡的 `a_not_b.count` 是篇數，`a_not_b.studies` 是研究清單（PMID、標題、作者、期刊、年份）。
+首頁下方是查詢介面。選擇用詞彙或座標查詢，輸入 A 與 B 後按 Dissociate，或直接按範例按鈕，就會顯示兩邊的篇數與研究清單。範本要求的 `/img` 與 `/test_db` 都可以正常開啟，所有端點的說明與試用介面在 `/docs`。
 
-可加在網址後面的參數：
+## 實作內容
 
-| 參數 | 作用 |
-|---|---|
-| `?both=true` | 同時回傳反方向（B 有、A 沒有） |
-| `?analyze=true` | 加上兩邊各自的特徵詞與特徵腦區 |
-| `?threshold=0.001` | 詞彙門檻（預設 0.001） |
-| `?radius=6` | 座標半徑，單位 mm（預設 6） |
-| `?limit=100&offset=0` | 分頁（預設每邊最多列 1,000 篇） |
+依照老師的 ns-nano 範本，把 Neurosynth 資料匯入 Render 上的 PostgreSQL（PostGIS），並用 FastAPI 實作兩個查詢，網址格式與範本相同。判定標準採用 Neurosynth 的慣例：研究的詞彙 TF-IDF 權重大於 0.001，視為提到該詞；研究有活化點落在座標 6 mm 以內，視為提到該座標。
 
-### 2. 用網頁查詢
+範本的檔案都沒有修改，但實作時發現三個地方需要另外處理：
 
-首頁下方是查詢介面：
+1. `create_db.py` 沒有去掉詞彙欄名的前綴，照原樣匯入後查不到任何詞彙，所以另寫了 `load_db.py`。
+2. `requirements.txt` 沒有固定版本，現在安裝到的 SQLAlchemy 預設驅動與範本不同，會無法連線，所以固定了版本。
+3. 座標用的 2D 索引不適合三維距離查詢，改用 3D 索引後，同一個查詢從 634 ms 縮短為 7 ms。
 
-1. 選「By terms」（用詞）或「By locations」（用座標）。
-2. 填 A 和 B，按「Dissociate」；或直接按「Examples」裡的範例。
-3. 結果會顯示兩邊篇數、各自的特徵詞，以及研究清單（點標題連到 PubMed）。
+除了作業要求的部分，另外加上網頁查詢介面，以及比較兩組研究各自常見詞彙與腦區的分析（網址加上 `analyze=true`）。
 
-### 3. 範本的檢查項目
+## 驗證
 
-- [/img](https://ns-nano-hw08.onrender.com/img)：顯示杏仁核動圖
-- [/test_db](https://ns-nano-hw08.onrender.com/test_db)：顯示資料庫連線狀態與各表筆數
+另外寫了一個只用 pandas 直接讀取原始資料的對照程式（`tests/reference.py`），用 12 組查詢與網站結果逐篇比對，結果完全一致。全部 75 個自動測試在線上網站都通過。程式碼也另外請 AI 審查，發現的問題都已修正。
 
-### 4. API 文件
+老師的預設模式網路範例結果如下：
 
-[/docs](https://ns-nano-hw08.onrender.com/docs) 列出所有端點。點開一個 → 按「Try it out」→ 按「Execute」，就能直接試打（範例值已填好）。
-
-## 做了什麼
-
-- **作業要求**：照老師 [ns-nano](https://github.com/spiketren/ns-nano) 的規格，做出兩個解離查詢，網址格式與範本相同；資料存在 Render 的 PostgreSQL + PostGIS，網站部署在 Render。範本的 `/img`、`/test_db` 保留。
-- **「提到」的定義**：
-  - 詞：該研究的 TF-IDF 權重 > 0.001（Neurosynth 慣例）
-  - 座標：該研究有活化點落在 6 mm 內（neurosynth 套件預設）
-- **與範本不同的地方**（範本檔案本身都沒改）：
-  - 用 FastAPI 取代 Flask（題目允許），好處是自動檢查參數、自動產生 `/docs`。
-  - 範本的 `create_db.py` 沒把詞彙前綴去掉，照用會查不到詞 → 另寫 `load_db.py`。
-  - 範本沒鎖套件版本，照裝會連不上資料庫 → 鎖定版本。
-  - 範本的座標索引類型不適合 3D 距離查詢 → 換成 3D 索引，查詢從 634 ms 變 7 ms。
-- **額外做的**：網頁查詢介面、特徵分析（`analyze=true`）、打錯詞時建議相近的詞。
-
-## 結果是否正確
-
-- 另寫一份只用 pandas 直接讀原始資料的對照程式（`tests/reference.py`），12 組查詢與網站結果逐篇比對，完全一致。
-- 共 75 個自動測試，線上網站全部通過。
-- 另請 AI 審查程式碼，找到的 14 個問題都已修正。
-
-老師的 DMN 範例結果：
-
-| 查詢 | A 有 B 沒有 | B 有 A 沒有 |
+| 查詢 | A 有、B 沒有 | B 有、A 沒有 |
 |---|---|---|
-| 詞：posterior cingulate vs ventromedial prefrontal | 897 篇 | 283 篇 |
-| 座標：[0, −52, 26] vs [−2, 50, −6] | 406 篇 | 424 篇 |
+| 詞彙：posterior cingulate／ventromedial prefrontal | 897 篇 | 283 篇 |
+| 座標：[0, −52, 26]／[−2, 50, −6] | 406 篇 | 424 篇 |
 
-特徵分析顯示：只提到 PCC 的研究多與 default mode network 相關；只提到 vmPFC 的研究多與 reward、value、decision making 相關，與文獻一致。
+只提到 PCC 的研究多與 default mode network 有關，只提到 vmPFC 的研究多與 reward、value、decision making 有關，與文獻相符。
 
 ## 程式檔案
 
-| 檔案 | 內容 |
-|---|---|
-| `app.py` | 網站本體：API、輸入檢查、資料庫查詢 |
-| `analysis.py` | 特徵分析（額外功能） |
-| `load_db.py` | 把老師的資料灌進資料庫 |
-| `benchmark.py` | 效能量測 |
-| `static/` | 首頁 `index.html`、範本的 `amygdala.gif` |
-| `tests/` | 自動測試與對照程式 |
-| `requirements.txt`、`render.yaml`、`LICENSE` | 套件清單、Render 設定、授權 |
+`app.py` 是網站本體，`analysis.py` 是額外的分析功能，`load_db.py` 負責把資料匯入資料庫，`benchmark.py` 用來量測效能，`static/` 放首頁與範本圖片，`tests/` 是測試程式。
 
-## 在自己電腦執行
+## 本機執行
 
-需要一個有 PostGIS 的 PostgreSQL，以及老師 repo 的三個 parquet 檔。在 `ns-nano-hw08/` 資料夾裡：
+需要一個有 PostGIS 的 PostgreSQL，以及老師 repo 中的三個 parquet 檔。在程式資料夾中執行：
 
 ```bash
 pip install -r requirements.txt
 export DB_URL="postgresql://使用者:密碼@主機:5432/資料庫"
 export NS_DATA_DIR=/path/to/ns-nano      # 老師 repo 的資料夾
-python load_db.py                         # 灌資料，約 3 分鐘
+python load_db.py                         # 匯入資料，約 3 分鐘
 uvicorn app:app                           # 開啟 http://127.0.0.1:8000
 ```
 
-跑測試：
+執行測試：
 
 ```bash
 pip install pandas==3.1.1 pyarrow==26.0.1 pytest==9.2.0 httpx==0.28.1 playwright==1.64.1
-pytest                                                   # 測本機（需要 DB_URL、NS_DATA_DIR）
-API_BASE=https://ns-nano-hw08.onrender.com pytest       # 測線上網站
+pytest                                                # 測試本機
+API_BASE=https://ns-nano-hw08.onrender.com pytest    # 測試線上網站
 ```
 
 ## 限制
 
-- 免費方案：網站閒置會休眠；資料庫 2026-12-04 到期。
-- 研究清單每邊預設最多列 1,000 篇，`count` 永遠是完整總數。
-- 特徵分析只是描述性的比較，沒有做統計校正。
+Render 免費方案的網站閒置後會休眠，資料庫將於 2026-12-04 到期。分析功能只是描述性的比較，沒有做統計校正。
 
 ## AI 使用說明
 

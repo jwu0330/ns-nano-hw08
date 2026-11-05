@@ -69,6 +69,19 @@
   table.locs td, table.locs th { padding: 2px 8px 2px 0; text-align: right; }
   table.locs th { color: var(--text-muted); font-weight: 500; }
   footer { margin-top: 32px; font-size: 13px; }
+  .api-wrap { overflow-x: auto; }
+  table.api { border-collapse: collapse; font-size: 14px; width: 100%; }
+  table.api td { padding: 6px 12px 6px 0; vertical-align: top; border-top: 1px solid var(--border); }
+  table.api tr:first-child td { border-top: 0; }
+  table.api td:first-child { white-space: nowrap; }
+  table.api code { font-size: 13px; }
+  @media (max-width: 760px) {
+    table.api, table.api tbody, table.api tr, table.api td { display: block; }
+    table.api td { padding: 2px 0; border-top: 0; }
+    table.api tr { padding: 8px 0; border-top: 1px solid var(--border); }
+    table.api tr:first-child { border-top: 0; }
+    table.api td:first-child { white-space: normal; overflow-wrap: anywhere; font-weight: 600; }
+  }
 </style>
 </head>
 <body>
@@ -77,6 +90,35 @@
   <div class="status secondary" id="status"><span class="dot" style="background:var(--text-muted)"></span>Server working! Checking the database…</div>
   <p class="secondary">Find the studies that mention <b>A</b> but not <b>B</b> in the
     <a href="https://neurosynth.org">Neurosynth</a> database (14,371 fMRI studies), by term or by MNI coordinate.</p>
+
+  <section class="card" id="api">
+    <h2>API</h2>
+    <div class="api-wrap"><table class="api">
+      <tr>
+        <td><code>GET /dissociate/terms/{term_a}/{term_b}</code></td>
+        <td>Studies that mention term A but not term B.
+          Try: <a href="/dissociate/terms/posterior_cingulate/ventromedial_prefrontal" target="_blank">PCC but not vmPFC</a> ·
+          <a href="/dissociate/terms/ventromedial_prefrontal/posterior_cingulate" target="_blank">vmPFC but not PCC</a></td>
+      </tr>
+      <tr>
+        <td><code>GET /dissociate/locations/{x1_y1_z1}/{x2_y2_z2}</code></td>
+        <td>Studies reporting activation near location A but not near B (MNI, mm).
+          Try: <a href="/dissociate/locations/0_-52_26/-2_50_-6" target="_blank">[0, −52, 26] but not [−2, 50, −6]</a> ·
+          <a href="/dissociate/locations/-2_50_-6/0_-52_26" target="_blank">[−2, 50, −6] but not [0, −52, 26]</a></td>
+      </tr>
+      <tr>
+        <td>Options</td>
+        <td><code>both=true</code> both directions · <code>analyze=true</code> characteristic terms and locations ·
+          <code>threshold</code> (default 0.001) · <code>radius</code> (default 6 mm) · <code>limit</code>, <code>offset</code> paging</td>
+      </tr>
+      <tr>
+        <td>Template checks</td>
+        <td><a href="/img" target="_blank">/img</a> · <a href="/test_db" target="_blank">/test_db</a> ·
+          full documentation: <a href="/docs" target="_blank">/docs</a> ·
+          source: <a href="https://github.com/jwu0330/ns-nano-hw08" target="_blank">GitHub</a></td>
+      </tr>
+    </table></div>
+  </section>
 
   <section class="card">
     <div class="tabs" role="tablist">
@@ -111,9 +153,7 @@
   <div class="cols" id="sides"></div>
 
   <footer class="muted">
-    API: <a href="/docs">interactive docs</a> · <a href="/test_db">/test_db</a> · <a href="/img">/img</a> ·
-    <a href="https://github.com/jwu0330/ns-nano-hw08">source</a> ·
-    based on <a href="https://github.com/spiketren/ns-nano">spiketren/ns-nano</a>.
+    Based on <a href="https://github.com/spiketren/ns-nano">spiketren/ns-nano</a>.
     Studies link to PubMed. Characteristic terms/locations are ranked by the z score of the log odds ratio between the two sides.
   </footer>
 </main>

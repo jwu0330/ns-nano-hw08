@@ -39,6 +39,8 @@ def test_terms_flow(page):
     page.errors.clear()
     page.goto(API_BASE + "/")
     page.wait_for_selector("#status:has-text('database connected')", timeout=90_000)
+    links = [a.get_attribute("href") for a in page.locator("#api a").all()]
+    assert sum(h.startswith("/dissociate/") for h in links) == 4 and {"/img", "/test_db", "/docs"} <= set(links)
     page.click("#examples button:has-text('DMN')")
     page.wait_for_selector("#sides .side", timeout=60_000)
     assert "897" in page.inner_text("#legend")  # A only, matches the oracle-tested count

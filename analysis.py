@@ -3,7 +3,7 @@
 For every term (or 10 mm brain cell) it compares how often the A-only studies
 and the B-only studies mention it, as a log odds ratio with its z score.
 
-Counting uses a sparse study-by-feature index that ``scripts/load_db.py`` builds
+Counting uses a sparse study-by-feature index that ``load_db.py`` builds
 from the same data and stores in ``ns.artifacts``; it is read once per process.
 Aggregating the ~10^5 matching rows in PostgreSQL took 2-3 s per request on the
 free-tier database, the in-memory count takes milliseconds.
@@ -21,7 +21,6 @@ from typing import Iterable
 import numpy as np
 from sqlalchemy import text
 
-from .db import get_engine
 
 
 class StaleIndex(RuntimeError):
@@ -74,10 +73,11 @@ class AnalysisIndex:
 class _Loader:
     def __init__(self) -> None:
         self._lock = threading.Lock()
+        self.engine = None  # callable returning the SQLAlchemy engine; set by app.py
 
     @cached_property
     def index(self) -> AnalysisIndex:
-        with get_engine().connect() as conn:
+        with self.engine().connect() as conn:
             blob = conn.execute(text("SELECT data FROM ns.artifacts WHERE name = 'analysis_index'")).scalar_one()
         return AnalysisIndex.from_bytes(bytes(blob))
 
@@ -87,6 +87,15 @@ class _Loader:
 
 
 _loader = _Loader()
+
+
+def configure(engine_factory) -> None:
+    """Tell the module how to reach the database (called once by app.py)."""
+    _loader.engine = engine_factory
+
+
+def get_index() -> AnalysisIndex:
+    return _loader.get()
 
 
 def reset() -> None:
@@ -133,7 +142,7 @@ def characteristic_terms(
     """
     if not a_only or not b_only:
         return {"a_not_b": [], "b_not_a": []}
-    idx = _loader.get()
+    idx = get_index()
     n_a, n_b = idx.term_counts(a_only, threshold), idx.term_counts(b_only, threshold)
     query_words = {w for t in exclude for w in t.split()}
     keep = [i for i, t in enumerate(idx.vocab.tolist()) if not query_words & set(t.split())]
@@ -145,7 +154,7 @@ def characteristic_locations(a_only: frozenset[str], b_only: frozenset[str], k: 
     """10 mm grid cells where A\\B studies report foci more often than B\\A studies."""
     if not a_only or not b_only:
         return {"a_not_b": [], "b_not_a": []}
-    idx = _loader.get()
+    idx = get_index()
     n_a, n_b = idx.cell_counts(a_only), idx.cell_counts(b_only)
     labels = [{"center": c} for c in idx.cells.tolist()]
     return _rank(labels, n_a, n_b, len(a_only), len(b_only), k)

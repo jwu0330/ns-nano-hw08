@@ -1,6 +1,6 @@
 # Render Blueprint: one free PostgreSQL + one free web service in Singapore.
 # After the first deploy, load the data once from any machine allowed by the
-# database's IP allow list:  python scripts/load_db.py --url "<external URL>"
+# database's IP allow list:  python load_db.py --url "<external URL>"
 databases:
   - name: ns-nano-hw08-db
     plan: free

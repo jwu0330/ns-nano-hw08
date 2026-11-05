@@ -1,7 +1,0 @@
--r requirements.txt
-# Loading the database, tests, and the UI check
-pandas==3.1.1
-pyarrow==26.0.1
-pytest==9.2.0
-httpx==0.28.1
-playwright==1.64.1

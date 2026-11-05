@@ -23,7 +23,7 @@ Everything is built in a staging schema and swapped in with one transaction,
 so the live API never sees a half-loaded database.
 
 Usage:
-    python scripts/load_db.py --url "$DB_URL" [--data-dir ../raw/ns-nano]
+    python load_db.py --url "$DB_URL" [--data-dir ../raw/ns-nano]
 """
 
 from __future__ import annotations
@@ -42,7 +42,7 @@ import pandas as pd
 import psycopg
 
 HERE = Path(__file__).resolve().parent
-DEFAULT_DATA = Path(os.getenv("NS_DATA_DIR", HERE.parent.parent / "raw" / "ns-nano"))
+DEFAULT_DATA = Path(os.getenv("NS_DATA_DIR", HERE.parent / "raw" / "ns-nano"))
 TERM_PREFIX_SEP = "__"  # column names look like terms_abstract_tfidf__<term>
 SCHEMA = "ns"
 STAGE = "ns_build"

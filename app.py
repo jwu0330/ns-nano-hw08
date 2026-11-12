@@ -673,7 +673,7 @@ def _coords_of(ids: Iterable[str]) -> list[dict]:
 def lotus_terms() -> dict[str, Any]:
     """All vocabulary terms that at least one study mentions."""
     with get_engine().connect() as conn:
-        return {"terms": list(conn.execute(text("SELECT term FROM ns.terms WHERE n_studies > 0 ORDER BY term")).scalars())}
+        return {"terms": list(conn.execute(text("SELECT term FROM ns.terms WHERE n_studies > 0 AND term ~ '^[a-z]' ORDER BY term")).scalars())}
 
 
 @lotus.get("/terms/{term}")

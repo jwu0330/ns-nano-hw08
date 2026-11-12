@@ -293,7 +293,7 @@ async def _timing_and_cache(request: Request, call_next):
     response.headers["Server-Timing"] = f"app;dur={(time.perf_counter() - t0) * 1000:.1f}"
     # The data only changes when load_db.py is rerun (followed by a restart),
     # so successful lookups can be cached by browsers for an hour.
-    if response.status_code == 200 and request.url.path.startswith(("/dissociate", "/terms", "/locations")):
+    if response.status_code == 200 and request.url.path.startswith(("/dissociate", "/terms", "/locations", "/lotus")):
         response.headers["Cache-Control"] = "public, max-age=3600"
     return response
 
@@ -515,3 +515,310 @@ def test_db() -> JSONResponse:
         log.exception("test_db failed")
         payload["error"] = type(exc).__name__  # details go to the log, not to the client
         return JSONResponse(payload, status_code=500)
+
+
+# ============================================================================
+# 5. LoTUS-BF compatible API (added for HW09, 2026-11-12)
+# ============================================================================
+# The HW09 front end (LoTUS-BF template) speaks the course LoTUS API. The course server
+# was down on 2026-11-12, so the same endpoints are served here from the HW08 database:
+#   /lotus/terms, /lotus/terms/{term}, /lotus/query/{q}/studies|locations|nii, /lotus/decode/{x_y_z}
+# Query syntax: terms and [x,y,z] combined with AND / OR / NOT and parentheses.
+# Definitions as in HW08: TF-IDF > 0.001 for terms; foci within r mm (default 6) for locations.
+import gzip
+import math
+import struct
+
+import numpy as np
+from fastapi import APIRouter
+from fastapi.responses import Response
+
+lotus = APIRouter(prefix="/lotus", tags=["lotus (HW09)"])
+LOTUS_THRESHOLD = 0.001
+_TOKEN = re.compile(r"\[[^\]]*\]|\(|\)|[^\s()\[\]]+")
+_OPS = {"AND", "OR", "NOT"}
+
+
+class LotusError(Exception):
+    """Errors in the course-API shape: {"error": "message"}."""
+
+    def __init__(self, message: str, status: int = 400):
+        super().__init__(message)
+        self.message, self.status = message, status
+
+
+@app.exception_handler(LotusError)
+async def _lotus_error(_: Request, exc: LotusError) -> JSONResponse:
+    return JSONResponse(status_code=exc.status, content={"error": exc.message})
+
+
+@lru_cache(maxsize=1)
+def _universe() -> frozenset[str]:
+    with get_engine().connect() as conn:
+        return frozenset(conn.execute(text("SELECT study_id FROM ns.metadata")).scalars())
+
+
+def _tokens(q: str) -> list[tuple[str, Any]]:
+    """Words next to each other form one term ("default mode"); operators are AND/OR/NOT in any case."""
+    out: list[tuple[str, Any]] = []
+    for tok in _TOKEN.findall(q):
+        if tok in "()":
+            out.append((tok, None))
+        elif tok.startswith("["):
+            try:
+                xyz = parse_coords(tok[1:-1])
+            except InputError as e:
+                raise LotusError(f"{e.message} {e.hint or ''}".strip())
+            out.append(("loc", xyz))
+        elif tok.upper() in _OPS:
+            out.append((tok.upper(), None))
+        elif out and out[-1][0] == "term":
+            out[-1] = ("term", out[-1][1] + " " + tok)
+        else:
+            out.append(("term", tok))
+    return out
+
+
+class _Parser:
+    """expr := and (OR and)* ; and := unary ([AND] unary)* ; unary := NOT unary | ( expr ) | term | [x,y,z]"""
+
+    def __init__(self, q: str, r: float):
+        self.toks, self.i, self.r = _tokens(q), 0, r
+        self.terms: list[str] = []
+        self.locations: list[list[float]] = []
+        if not self.toks:
+            raise LotusError("Empty query.")
+
+    def peek(self):
+        return self.toks[self.i][0] if self.i < len(self.toks) else None
+
+    def take(self):
+        tok = self.toks[self.i]
+        self.i += 1
+        return tok
+
+    def parse(self) -> frozenset[str]:
+        result = self.expr()
+        if self.peek() is not None:
+            raise LotusError(f"Unexpected {self.peek()!r} in the query.")
+        return result
+
+    def expr(self):
+        result = self.and_()
+        while self.peek() == "OR":
+            self.take()
+            result = result | self.and_()
+        return result
+
+    def and_(self):
+        result = self.unary()
+        while self.peek() in ("AND", "NOT", "(", "term", "loc"):
+            if self.peek() == "AND":
+                self.take()
+            result = result & self.unary()
+        return result
+
+    def unary(self):
+        kind = self.peek()
+        if kind is None:
+            raise LotusError("The query ends where a term or [x,y,z] is expected.")
+        kind, value = self.take()
+        if kind == "NOT":
+            return _universe() - self.unary()
+        if kind == "(":
+            result = self.expr()
+            if self.peek() != ")":
+                raise LotusError("Missing closing parenthesis.")
+            self.take()
+            return result
+        if kind == "term":
+            try:
+                term = normalize_term(value)
+                ids = _term_set(term, LOTUS_THRESHOLD)
+            except InputError as e:
+                raise LotusError(e.message)
+            except NotFound as e:
+                hint = f" Did you mean: {', '.join(e.suggestions)}?" if e.suggestions else ""
+                raise LotusError(e.message + hint, 404)
+            self.terms.append(term)
+            return ids
+        if kind == "loc":
+            self.locations.append(fmt_coords(value))
+            return _near_set(value, self.r)
+        raise LotusError(f"Unexpected {kind!r} in the query.")
+
+
+LotusR = Annotated[float, Query(gt=0, le=30, description="Radius (mm) for [x,y,z] terms.")]
+
+
+def _run(q: str, r: float) -> tuple[frozenset[str], dict[str, Any]]:
+    p = _Parser(q, r)
+    ids = p.parse()
+    return ids, {"query": q, "terms": p.terms, "locations": p.locations, "r": r, "threshold": LOTUS_THRESHOLD}
+
+
+def _coords_of(ids: Iterable[str]) -> list[dict]:
+    ids = list(ids)
+    if not ids:
+        return []
+    with get_engine().connect() as conn:
+        rows = conn.execute(text(
+            "SELECT study_id, ST_X(geom) AS x, ST_Y(geom) AS y, ST_Z(geom) AS z "
+            "FROM ns.coordinates WHERE study_id = ANY(:ids) ORDER BY study_id"
+        ), {"ids": ids}).mappings()
+        return [dict(r) for r in rows]
+
+
+@lotus.get("/terms")
+def lotus_terms() -> dict[str, Any]:
+    """All vocabulary terms that at least one study mentions."""
+    with get_engine().connect() as conn:
+        return {"terms": list(conn.execute(text("SELECT term FROM ns.terms WHERE n_studies > 0 ORDER BY term")).scalars())}
+
+
+@lotus.get("/terms/{term}")
+def lotus_related(term: str, limit: Annotated[int, Query(ge=1, le=200)] = 50) -> dict[str, Any]:
+    """Terms that co-occur with `term` (shared studies and Jaccard overlap)."""
+    try:
+        t = normalize_term(term)
+    except InputError as e:
+        raise LotusError(e.message)
+    try:
+        a = _term_set(t, LOTUS_THRESHOLD)
+    except NotFound as e:
+        raise LotusError(e.message, 404)
+    with get_engine().connect() as conn:
+        rows = conn.execute(text(
+            "SELECT at.term, count(DISTINCT at.study_id) AS co, max(t.n_studies) AS n "
+            "FROM ns.annotations_terms at JOIN ns.terms t USING (term) "
+            "WHERE at.study_id = ANY(:ids) AND at.weight > :th AND at.term <> :t GROUP BY at.term"
+        ), {"ids": list(a), "th": LOTUS_THRESHOLD, "t": t}).all()
+    related = [{"term": term_, "co_count": co, "jaccard": co / (len(a) + n - co)} for term_, co, n in rows if len(a) + n - co > 0]
+    related.sort(key=lambda d: (-d["jaccard"], -d["co_count"], d["term"]))
+    return {"term": t, "count": len(a), "related": related[:limit]}
+
+
+@lotus.get("/query/{q}/studies")
+def lotus_studies(q: str, r: LotusR = 6.0) -> dict[str, Any]:
+    ids, applied = _run(q, r)
+    with get_engine().connect() as conn:
+        rows = study_details(conn, ids, None, 0)
+    for row in rows:
+        row["id"] = row["study_id"]
+    return {"applied": applied, "count": len(ids), "results": rows}
+
+
+@lotus.get("/query/{q}/locations")
+def lotus_locations(q: str, r: LotusR = 6.0) -> dict[str, Any]:
+    ids, applied = _run(q, r)
+    rows = _coords_of(ids)
+    return {"applied": applied, "location_counts": len(rows), "study_counts": len({d["study_id"] for d in rows}), "results": rows}
+
+
+# MNI152 2 mm grid used by the front end: x = -2i + 90, y = 2j - 126, z = 2k - 72.
+GRID = (91, 109, 91)
+SROW = ((-2.0, 0.0, 0.0, 90.0), (0.0, 2.0, 0.0, -126.0), (0.0, 0.0, 2.0, -72.0))
+
+
+def _smooth_matrix(n: int, kernel: np.ndarray) -> np.ndarray:
+    """n x n matrix that convolves a length-n axis with a centred 1-D kernel (zero padding)."""
+    half = len(kernel) // 2
+    m = np.zeros((n, n), dtype=np.float32)
+    for off, w in enumerate(kernel, start=-half):
+        m += np.eye(n, k=off, dtype=np.float32) * w
+    return m
+
+
+def _density(coords: list[dict], fwhm: float, kernel: str) -> np.ndarray:
+    """MKDA-style map: each study counts once per voxel, then a separable Gaussian or box filter."""
+    vol = np.zeros(GRID, dtype=np.float32)
+    if coords:
+        xyz = np.array([[c["x"], c["y"], c["z"]] for c in coords], dtype=np.float64)
+        ijk = np.rint([(90 - xyz[:, 0]) / 2, (xyz[:, 1] + 126) / 2, (xyz[:, 2] + 72) / 2]).astype(int).T
+        ok = np.all((ijk >= 0) & (ijk < np.array(GRID)), axis=1)
+        study = np.array([c["study_id"] for c in coords])[ok]
+        keys = {(s, *v) for s, v in zip(study, map(tuple, ijk[ok]))}  # one vote per study per voxel
+        if keys:
+            idx = np.array([k[1:] for k in keys])
+            np.add.at(vol, (idx[:, 0], idx[:, 1], idx[:, 2]), 1.0)
+    if fwhm > 0:
+        if kernel == "uniform":
+            width = max(1, int(round(fwhm / 2)))
+            k1 = np.ones(2 * (width // 2) + 1, dtype=np.float32)
+            k1 /= k1.sum()
+        else:
+            sigma = fwhm / (2 * math.sqrt(2 * math.log(2))) / 2.0  # in 2 mm voxels
+            half = max(1, int(math.ceil(3 * sigma)))
+            k1 = np.exp(-0.5 * (np.arange(-half, half + 1) / sigma) ** 2).astype(np.float32)
+            k1 /= k1.sum()
+        for axis, n in enumerate(GRID):
+            vol = np.moveaxis(np.tensordot(_smooth_matrix(n, k1), np.moveaxis(vol, axis, 0), axes=1), 0, axis)
+    return vol
+
+
+def _nifti_gz(vol: np.ndarray, description: str) -> bytes:
+    """Minimal NIfTI-1 (.nii.gz) writer, float32, MNI sform."""
+    hdr = struct.pack(
+        "<i10s18sihcc8h3f4h8f3fhcc4f2i80s24s2h6f4f4f4f16s4s",
+        348, b"", b"", 0, 0, b"r", b"\0",
+        3, *GRID, 1, 1, 1, 1,
+        0.0, 0.0, 0.0,
+        0, 16, 32, 0,
+        1.0, 2.0, 2.0, 2.0, 1.0, 1.0, 1.0, 1.0,
+        352.0, 1.0, 0.0,
+        0, b"\0", bytes([10]),
+        float(vol.max()), 0.0, 0.0, 0.0,
+        0, 0,
+        description.encode()[:79], b"",
+        0, 4,
+        0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+        *SROW[0], *SROW[1], *SROW[2],
+        b"", b"n+1\0",
+    )
+    return gzip.compress(hdr + b"\0\0\0\0" + vol.astype("<f4").tobytes(order="F"), compresslevel=6)
+
+
+@lotus.get("/query/{q}/nii")
+def lotus_nii(
+    q: str,
+    r: LotusR = 6.0,
+    fwhm: Annotated[float, Query(ge=0, le=30)] = 10.0,
+    kernel: Annotated[str, Query(pattern="^(gauss|uniform)$")] = "gauss",
+    voxel: Annotated[float, Query(description="Only 2 mm is supported (MNI152 2 mm grid).")] = 2.0,
+) -> Response:
+    ids, _ = _run(q, r)
+    vol = _density(_coords_of(ids), fwhm, kernel)
+    body = _nifti_gz(vol, f"LoTUS-BF HW09 {len(ids)} studies")
+    return Response(body, media_type="application/gzip",
+                    headers={"Content-Disposition": 'attachment; filename="lotus_map.nii.gz"', "X-Study-Count": str(len(ids))})
+
+
+@lotus.get("/decode/{coords}")
+def lotus_decode(coords: str, r: LotusR = 6.0, limit: Annotated[int, Query(ge=1, le=100)] = 30) -> dict[str, Any]:
+    """Reverse inference: terms over-represented among studies reporting foci near [x, y, z]."""
+    try:
+        xyz = parse_coords(coords)
+    except InputError as e:
+        raise LotusError(f"{e.message} {e.hint or ''}".strip())
+    ids = _near_set(xyz, r)
+    total = len(_universe())
+    out: dict[str, Any] = {"xyz": fmt_coords(xyz), "r": r, "n_studies": len(ids), "n_total": total, "terms": []}
+    if not ids:
+        return out
+    with get_engine().connect() as conn:
+        rows = conn.execute(text(
+            "SELECT at.term, count(DISTINCT at.study_id) AS k, max(t.n_studies) AS n "
+            "FROM ns.annotations_terms at JOIN ns.terms t USING (term) "
+            "WHERE at.study_id = ANY(:ids) AND at.weight > :th GROUP BY at.term"
+        ), {"ids": list(ids), "th": LOTUS_THRESHOLD}).all()
+    min_k = max(3, math.ceil(0.05 * len(ids)))
+    terms = [
+        {"term": term, "k": k, "rate": k / len(ids), "base_rate": n / total, "lift": (k / len(ids)) / (n / total)}
+        for term, k, n in rows if k >= min_k and n
+    ]
+    terms.sort(key=lambda d: (-d["lift"], -d["k"]))
+    out["terms"] = terms[:limit]
+    return out
+
+
+app.include_router(lotus)

@@ -293,7 +293,7 @@ async def _timing_and_cache(request: Request, call_next):
     response.headers["Server-Timing"] = f"app;dur={(time.perf_counter() - t0) * 1000:.1f}"
     # The data only changes when load_db.py is rerun (followed by a restart),
     # so successful lookups can be cached by browsers for an hour.
-    if response.status_code == 200 and request.url.path.startswith(("/dissociate", "/terms", "/locations", "/lotus")):
+    if response.status_code == 200 and request.url.path.startswith(("/dissociate", "/terms", "/locations", "/lotus/", "/lotus-bf/api/", "/lotus-bf/assets/")):
         response.headers["Cache-Control"] = "public, max-age=3600"
     return response
 
@@ -533,7 +533,7 @@ import numpy as np
 from fastapi import APIRouter
 from fastapi.responses import Response
 
-lotus = APIRouter(prefix="/lotus", tags=["lotus (HW09)"])
+lotus = APIRouter(tags=["lotus (HW09)"])  # mounted at /lotus and at /lotus-bf/api (see end)
 LOTUS_THRESHOLD = 0.001
 _TOKEN = re.compile(r"\[[^\]]*\]|\(|\)|[^\s()\[\]]+")
 _OPS = {"AND", "OR", "NOT"}
@@ -821,4 +821,27 @@ def lotus_decode(coords: str, r: LotusR = 6.0, limit: Annotated[int, Query(ge=1,
     return out
 
 
-app.include_router(lotus)
+app.include_router(lotus, prefix="/lotus")
+app.include_router(lotus, prefix="/lotus-bf/api", include_in_schema=False)
+
+# The HW09 front end (React build copied from the HW09 repo) is served here too, so the whole
+# site runs from this one service: https://ns-nano-hw08.onrender.com/lotus-bf/
+from fastapi.responses import RedirectResponse
+from fastapi.staticfiles import StaticFiles
+
+LOTUS_DIST = STATIC / "lotus-bf"
+if LOTUS_DIST.exists():
+    app.mount("/lotus-bf/assets", StaticFiles(directory=LOTUS_DIST / "assets"), name="lotus-assets")
+    app.mount("/lotus-bf/static", StaticFiles(directory=LOTUS_DIST / "static"), name="lotus-static")
+
+    @app.get("/lotus-bf", include_in_schema=False)
+    def _lotus_redirect() -> RedirectResponse:
+        return RedirectResponse("/lotus-bf/")
+
+    @app.get("/lotus-bf/", include_in_schema=False)
+    @app.get("/lotus-bf/{rest:path}", include_in_schema=False)
+    def _lotus_spa(rest: str = "") -> FileResponse:
+        f = (LOTUS_DIST / rest).resolve()
+        if rest and f.is_file() and LOTUS_DIST.resolve() in f.parents:
+            return FileResponse(f)
+        return FileResponse(LOTUS_DIST / "index.html", headers={"Cache-Control": "no-cache"})

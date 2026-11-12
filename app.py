@@ -542,14 +542,15 @@ _OPS = {"AND", "OR", "NOT"}
 class LotusError(Exception):
     """Errors in the course-API shape: {"error": "message"}."""
 
-    def __init__(self, message: str, status: int = 400):
+    def __init__(self, message: str, status: int = 400, **extra: Any):
         super().__init__(message)
-        self.message, self.status = message, status
+        self.message, self.status, self.extra = message, status, extra
 
 
 @app.exception_handler(LotusError)
 async def _lotus_error(_: Request, exc: LotusError) -> JSONResponse:
-    return JSONResponse(status_code=exc.status, content={"error": exc.message})
+    # "error" keeps the course-API shape; extra fields (bad_term, suggestions) are machine-readable.
+    return JSONResponse(status_code=exc.status, content={"error": exc.message, **exc.extra})
 
 
 @lru_cache(maxsize=1)
@@ -639,7 +640,7 @@ class _Parser:
                 raise LotusError(e.message)
             except NotFound as e:
                 hint = f" Did you mean: {', '.join(e.suggestions)}?" if e.suggestions else ""
-                raise LotusError(e.message + hint, 404)
+                raise LotusError(e.message + hint, 404, bad_term=term, suggestions=e.suggestions)
             self.terms.append(term)
             return ids
         if kind == "loc":
@@ -669,11 +670,33 @@ def _coords_of(ids: Iterable[str]) -> list[dict]:
         return [dict(r) for r in rows]
 
 
+_WORD = re.compile(r"^[a-z]")  # hide numeric vocabulary entries such as "001" or "12 healthy"
+
+
+@lru_cache(maxsize=1)
+def _base_counts() -> np.ndarray:
+    """Studies mentioning each vocabulary term (TF-IDF > threshold), over the whole database."""
+    idx = analysis.get_index()
+    return idx.term_counts(idx.study_ids.tolist(), LOTUS_THRESHOLD)
+
+
+def _term_counts(ids: frozenset[str]) -> list[tuple[str, int, int]]:
+    """(term, studies among `ids` mentioning it, studies overall) for every word term with k > 0.
+
+    Uses HW08's in-memory study x term index (milliseconds) instead of a GROUP BY in PostgreSQL (seconds).
+    """
+    idx = analysis.get_index()
+    k = idx.term_counts(ids, LOTUS_THRESHOLD)
+    base = _base_counts()
+    return [(str(idx.vocab[j]), int(k[j]), int(base[j])) for j in np.flatnonzero(k) if _WORD.match(str(idx.vocab[j]))]
+
+
 @lotus.get("/terms")
 def lotus_terms() -> dict[str, Any]:
-    """All vocabulary terms that at least one study mentions."""
+    """All vocabulary terms that at least one study mentions, plus the number of studies."""
     with get_engine().connect() as conn:
-        return {"terms": list(conn.execute(text("SELECT term FROM ns.terms WHERE n_studies > 0 AND term ~ '^[a-z]' ORDER BY term")).scalars())}
+        terms = list(conn.execute(text("SELECT term FROM ns.terms WHERE n_studies > 0 AND term ~ '^[a-z]' ORDER BY term")).scalars())
+    return {"terms": terms, "n_studies": len(_universe())}
 
 
 @lotus.get("/terms/{term}")
@@ -686,13 +709,8 @@ def lotus_related(term: str, limit: Annotated[int, Query(ge=1, le=200)] = 50) ->
     try:
         a = _term_set(t, LOTUS_THRESHOLD)
     except NotFound as e:
-        raise LotusError(e.message, 404)
-    with get_engine().connect() as conn:
-        rows = conn.execute(text(
-            "SELECT at.term, count(DISTINCT at.study_id) AS co, max(t.n_studies) AS n "
-            "FROM ns.annotations_terms at JOIN ns.terms t USING (term) "
-            "WHERE at.study_id = ANY(:ids) AND at.weight > :th AND at.term <> :t GROUP BY at.term"
-        ), {"ids": list(a), "th": LOTUS_THRESHOLD, "t": t}).all()
+        raise LotusError(e.message, 404, bad_term=t, suggestions=e.suggestions)
+    rows = [(term_, co, n) for term_, co, n in _term_counts(a) if term_ != t]
     related = [{"term": term_, "co_count": co, "jaccard": co / (len(a) + n - co)} for term_, co, n in rows if len(a) + n - co > 0]
     related.sort(key=lambda d: (-d["jaccard"], -d["co_count"], d["term"]))
     return {"term": t, "count": len(a), "related": related[:limit]}
@@ -786,11 +804,16 @@ def lotus_nii(
     kernel: Annotated[str, Query(pattern="^(gauss|uniform)$")] = "gauss",
     voxel: Annotated[float, Query(description="Only 2 mm is supported (MNI152 2 mm grid).")] = 2.0,
 ) -> Response:
+    body, n = _nii_bytes(q, r, fwhm, kernel)
+    return Response(body, media_type="application/gzip",
+                    headers={"Content-Disposition": 'attachment; filename="lotus_map.nii.gz"', "X-Study-Count": str(n)})
+
+
+@lru_cache(maxsize=24)  # ~2 MB each; repeated maps (examples, back/forward) come back instantly
+def _nii_bytes(q: str, r: float, fwhm: float, kernel: str) -> tuple[bytes, int]:
     ids, _ = _run(q, r)
     vol = _density(_coords_of(ids), fwhm, kernel)
-    body = _nifti_gz(vol, f"LoTUS-BF HW09 {len(ids)} studies")
-    return Response(body, media_type="application/gzip",
-                    headers={"Content-Disposition": 'attachment; filename="lotus_map.nii.gz"', "X-Study-Count": str(len(ids))})
+    return _nifti_gz(vol, f"LoTUS-BF HW09 {len(ids)} studies"), len(ids)
 
 
 @lotus.get("/decode/{coords}")
@@ -805,12 +828,7 @@ def lotus_decode(coords: str, r: LotusR = 6.0, limit: Annotated[int, Query(ge=1,
     out: dict[str, Any] = {"xyz": fmt_coords(xyz), "r": r, "n_studies": len(ids), "n_total": total, "terms": []}
     if not ids:
         return out
-    with get_engine().connect() as conn:
-        rows = conn.execute(text(
-            "SELECT at.term, count(DISTINCT at.study_id) AS k, max(t.n_studies) AS n "
-            "FROM ns.annotations_terms at JOIN ns.terms t USING (term) "
-            "WHERE at.study_id = ANY(:ids) AND at.weight > :th GROUP BY at.term"
-        ), {"ids": list(ids), "th": LOTUS_THRESHOLD}).all()
+    rows = _term_counts(ids)
     min_k = max(3, math.ceil(0.05 * len(ids)))
     terms = [
         {"term": term, "k": k, "rate": k / len(ids), "base_rate": n / total, "lift": (k / len(ids)) / (n / total)}
